@@ -1,0 +1,6 @@
+{
+  "name": "AURIX AI",
+  "description": "Personal Bengali & multilingual AI voice assistant by RIAD with Gemini Live voice, floating bubble, and authorized phone control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

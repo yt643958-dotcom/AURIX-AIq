@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">AURIX AI</string>
+    <string name="accessibility_service_label">AURIX AI Assistant Control</string>
+    <string name="accessibility_service_description">Allows AURIX AI to read visible screen content, scroll, and assist with user-confirmed typing or button taps when requested by voice or text.</string>
+    <string name="notification_channel_name">AURIX AI Background Assistant</string>
+    <string name="notification_channel_desc">Keeps AURIX AI voice session and floating assistant bubble active.</string>
+    <string name="logo_content_description">AURIX AI official logo</string>
+</resources>
