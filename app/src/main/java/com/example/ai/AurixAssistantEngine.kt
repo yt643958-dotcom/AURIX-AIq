@@ -127,8 +127,8 @@ class AurixAssistantEngine private constructor(context: Context) {
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
-    private val _appCheckStatus = MutableStateFlow(AppCheckStateHolder.status)
-    val appCheckStatus: StateFlow<AppCheckStatus> = _appCheckStatus.asStateFlow()
+    val appCheckStatus: StateFlow<AppCheckStatus> = AppCheckStateHolder.statusFlow
+    val appCheckDiagnostic: StateFlow<String> = AppCheckStateHolder.diagnosticFlow
 
     private val _isAppInForeground = MutableStateFlow(true)
     val isAppInForeground: StateFlow<Boolean> = _isAppInForeground.asStateFlow()
@@ -199,11 +199,18 @@ class AurixAssistantEngine private constructor(context: Context) {
                 _statusBanner.value = err
             }
         },
-        onSessionClosed = {
+        onSessionClosed = { hadServerResponse ->
             scope.launch {
                 commitPendingUserTranscriptIfNeeded()
                 commitPendingAiTranscriptIfNeeded()
-                if (_voiceState.value != VoiceSessionState.ERROR) {
+                if (!hadServerResponse && _voiceState.value != VoiceSessionState.ERROR) {
+                    _voiceState.value = VoiceSessionState.ERROR
+                    _statusBanner.value = if (settings.value.language == AurixLanguage.ENGLISH) {
+                        "Gemini Live session closed without a reply. Please verify internet/App Check and try again."
+                    } else {
+                        "Gemini Live সংযোগ উত্তর ছাড়াই বন্ধ হয়েছে। ইন্টারনেট এবং App Check যাচাই করে আবার চেষ্টা করুন।"
+                    }
+                } else if (_voiceState.value != VoiceSessionState.ERROR) {
                     _voiceState.value = VoiceSessionState.DISCONNECTED
                 }
             }
@@ -214,6 +221,7 @@ class AurixAssistantEngine private constructor(context: Context) {
     val aiAmplitude: StateFlow<Float> = liveAudioEngine.aiAmplitude
 
     private val conversationMutex = Mutex()
+    private val textTurnMutex = Mutex()
 
     @Volatile
     private var lastFailedPrompt: String? = null
@@ -254,7 +262,7 @@ class AurixAssistantEngine private constructor(context: Context) {
     }
 
     fun refreshAppCheckStatus() {
-        _appCheckStatus.value = AppCheckStateHolder.status
+        // StateFlows on AppCheckStateHolder stay live automatically.
     }
 
     fun setAppForeground(inForeground: Boolean) {
@@ -263,6 +271,15 @@ class AurixAssistantEngine private constructor(context: Context) {
 
     fun clearStatusBanner() {
         _statusBanner.value = null
+    }
+
+    fun notifyMicPermissionDenied() {
+        val lang = settings.value.language
+        _statusBanner.value = if (lang == AurixLanguage.ENGLISH) {
+            "Microphone permission is required for live voice. You can still type messages below, or enable Mic in Android Settings."
+        } else {
+            "লাইভ ভয়েসের জন্য মাইক্রোফোন অনুমতি প্রয়োজন। আপনি নিচে লিখেও চ্যাট করতে পারেন অথবা Settings থেকে Mic অনুমতি দিন।"
+        }
     }
 
     private suspend fun ensureActiveConversation(): Long = conversationMutex.withLock {
@@ -359,36 +376,55 @@ class AurixAssistantEngine private constructor(context: Context) {
                     accessibilityEnabled = automationManager.isAccessibilityEnabled()
                 )
 
-                val liveModel: LiveGenerativeModel = Firebase.ai(backend = GenerativeBackend.googleAI()).liveModel(
-                    modelName = AurixIdentity.LIVE_MODEL_NAME,
-                    generationConfig = liveGenerationConfig {
-                        responseModality = ResponseModality.AUDIO
-                        speechConfig = SpeechConfig(voice = Voice(currentSettings.voice.apiName))
-                        inputAudioTranscription = AudioTranscriptionConfig()
-                        outputAudioTranscription = AudioTranscriptionConfig()
-                        contextWindowCompression = ContextWindowCompressionConfig(
-                            triggerTokens = 16000,
-                            slidingWindow = SlidingWindow(targetTokens = 4000)
+                val liveGenConfig = liveGenerationConfig {
+                    responseModality = ResponseModality.AUDIO
+                    speechConfig = SpeechConfig(voice = Voice(currentSettings.voice.apiName))
+                    inputAudioTranscription = AudioTranscriptionConfig()
+                    outputAudioTranscription = AudioTranscriptionConfig()
+                    contextWindowCompression = ContextWindowCompressionConfig(
+                        triggerTokens = 16000,
+                        slidingWindow = SlidingWindow(targetTokens = 4000)
+                    )
+                    realtimeInputConfig = RealtimeInputConfig.builder()
+                        .setAutomaticActivityDetection(
+                            ActivityDetectionConfig.builder()
+                                .setStartSensitivity(ActivityDetectionConfig.Sensitivity.HIGH)
+                                .setEndSensitivity(ActivityDetectionConfig.Sensitivity.LOW)
+                                .setPrefixPaddingMs(40)
+                                .setSilenceDurationMs(600)
+                                .build()
                         )
-                        realtimeInputConfig = RealtimeInputConfig.builder()
-                            .setAutomaticActivityDetection(
-                                ActivityDetectionConfig.builder()
-                                    .setStartSensitivity(ActivityDetectionConfig.Sensitivity.HIGH)
-                                    .setEndSensitivity(ActivityDetectionConfig.Sensitivity.LOW)
-                                    .setPrefixPaddingMs(40)
-                                    .setSilenceDurationMs(600)
-                                    .build()
-                            )
-                            .setActivityHandling(RealtimeInputConfig.ActivityHandling.INTERRUPT)
-                            .setTurnCoverage(RealtimeInputConfig.TurnCoverage.ONLY_ACTIVITY)
-                            .build()
-                    },
-                    tools = listOf(AurixTools.tool),
-                    systemInstruction = content { text(systemPrompt) }
-                )
+                        .setActivityHandling(RealtimeInputConfig.ActivityHandling.INTERRUPT)
+                        .setTurnCoverage(RealtimeInputConfig.TurnCoverage.ONLY_ACTIVITY)
+                        .build()
+                }
 
-                val session = withTimeout(30_000L) {
-                    liveModel.connect()
+                val sysContent = content { text(systemPrompt) }
+                val aiClient = Firebase.ai(backend = GenerativeBackend.googleAI())
+                val session = try {
+                    val primaryModel: LiveGenerativeModel = aiClient.liveModel(
+                        modelName = AurixIdentity.LIVE_MODEL_NAME,
+                        generationConfig = liveGenConfig,
+                        tools = listOf(AurixTools.tool),
+                        systemInstruction = sysContent
+                    )
+                    withTimeout(30_000L) {
+                        primaryModel.connect()
+                    }
+                } catch (primaryEx: Exception) {
+                    if (primaryEx is CancellationException && primaryEx !is TimeoutCancellationException) {
+                        throw primaryEx
+                    }
+                    Log.w(TAG, "Primary Live model failed (${primaryEx.message}); trying fallback Live model.")
+                    val fallbackModel: LiveGenerativeModel = aiClient.liveModel(
+                        modelName = AurixIdentity.LIVE_FALLBACK_MODEL_NAME,
+                        generationConfig = liveGenConfig,
+                        tools = listOf(AurixTools.tool),
+                        systemInstruction = sysContent
+                    )
+                    withTimeout(30_000L) {
+                        fallbackModel.connect()
+                    }
                 }
                 liveSession = session
 
@@ -473,118 +509,122 @@ class AurixAssistantEngine private constructor(context: Context) {
         if (trimmed.isEmpty()) return
 
         scope.launch {
-            val convId = ensureActiveConversation()
-            val currentSettings = settingsRepository.getCurrentSettings()
-            _statusBanner.value = null
+            textTurnMutex.withLock {
+                val convId = ensureActiveConversation()
+                val currentSettings = settingsRepository.getCurrentSettings()
+                _statusBanner.value = null
 
-            // Quick local language command detection so preference updates immediately
-            detectExplicitLanguageSwitch(trimmed)?.let { switched ->
-                settingsRepository.setLanguage(switched)
-            }
-
-            val updatedLang = settingsRepository.getCurrentSettings().language
-            if (appendUserMessage) {
-                aurixRepository.appendMessage(
-                    conversationId = convId,
-                    role = "user",
-                    content = trimmed,
-                    inputMode = "TEXT",
-                    languageCode = updatedLang.code
-                )
-            }
-
-            // If live voice session is active, send into the same LiveSession so voice + text stay unified
-            val activeLive = liveSession
-            if (activeLive != null && !activeLive.isClosed() &&
-                (_voiceState.value == VoiceSessionState.LISTENING ||
-                    _voiceState.value == VoiceSessionState.SPEAKING ||
-                    _voiceState.value == VoiceSessionState.MUTED)
-            ) {
-                try {
-                    activeLive.send(trimmed, turnComplete = true)
-                    _textChatState.value = TextChatState.Idle
-                    lastFailedPrompt = null
-                    return@launch
-                } catch (e: Exception) {
-                    Log.w(TAG, "Live session text send failed; falling back to text model: ${e.message}")
+                // Quick local language command detection so preference updates immediately
+                detectExplicitLanguageSwitch(trimmed)?.let { switched ->
+                    settingsRepository.setLanguage(switched)
                 }
-            }
 
-            // Otherwise generate via Gemini 3.8 Flash with tool calling & sanitized Room history
-            lastFailedPrompt = trimmed
-            _textChatState.value = TextChatState.Sending
-            try {
-                val memories = if (currentSettings.memoryEnabled) {
-                    aurixRepository.getMemoryFactsOnce().map { it.fact }
-                } else {
-                    emptyList()
-                }
-                val systemPrompt = SystemPromptBuilder.build(
-                    language = updatedLang,
-                    memories = memories,
-                    accessibilityEnabled = automationManager.isAccessibilityEnabled()
-                )
-
-                val allMessages = aurixRepository.getMessagesOnce(convId)
-                val historyContents = ChatHistorySanitizer.buildChatHistoryBeforeCurrentPrompt(allMessages)
-
-                val response = try {
-                    executeTextChatTurn(
-                        convId = convId,
-                        prompt = trimmed,
-                        systemPrompt = systemPrompt,
-                        historyContents = historyContents,
-                        includeTools = true
+                val updatedLang = settingsRepository.getCurrentSettings().language
+                if (appendUserMessage) {
+                    aurixRepository.appendMessage(
+                        conversationId = convId,
+                        role = "user",
+                        content = trimmed,
+                        inputMode = "TEXT",
+                        languageCode = updatedLang.code
                     )
-                } catch (toolEx: Exception) {
-                    if (isToolSchemaRejection(toolEx)) {
-                        Log.w(TAG, "Tool declaration rejected by API, retrying turn without tools", toolEx)
+                }
+
+                // If live voice session is active, send into the same LiveSession so voice + text stay unified
+                val activeLive = liveSession
+                if (activeLive != null && !activeLive.isClosed() &&
+                    (_voiceState.value == VoiceSessionState.LISTENING ||
+                        _voiceState.value == VoiceSessionState.SPEAKING ||
+                        _voiceState.value == VoiceSessionState.MUTED)
+                ) {
+                    try {
+                        activeLive.send(trimmed, turnComplete = true)
+                        _textChatState.value = TextChatState.Idle
+                        lastFailedPrompt = null
+                        return@withLock
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Live session text send failed; falling back to text model: ${e.message}")
+                    }
+                }
+
+                // Otherwise generate via Gemini 3.8 Flash with tool calling & sanitized Room history
+                lastFailedPrompt = trimmed
+                _textChatState.value = TextChatState.Sending
+                try {
+                    val memories = if (currentSettings.memoryEnabled) {
+                        aurixRepository.getMemoryFactsOnce().map { it.fact }
+                    } else {
+                        emptyList()
+                    }
+                    val systemPrompt = SystemPromptBuilder.build(
+                        language = updatedLang,
+                        memories = memories,
+                        accessibilityEnabled = automationManager.isAccessibilityEnabled()
+                    )
+
+                    val allMessages = aurixRepository.getMessagesOnce(convId)
+                    val historyContents = ChatHistorySanitizer.buildChatHistoryBeforeCurrentPrompt(allMessages)
+
+                    val finalText = try {
                         executeTextChatTurn(
                             convId = convId,
                             prompt = trimmed,
                             systemPrompt = systemPrompt,
                             historyContents = historyContents,
-                            includeTools = false
+                            includeTools = true
                         )
-                    } else {
-                        throw toolEx
+                    } catch (toolEx: Exception) {
+                        if (isToolSchemaRejection(toolEx)) {
+                            Log.w(TAG, "Tool declaration rejected by API, retrying turn without tools", toolEx)
+                            executeTextChatTurn(
+                                convId = convId,
+                                prompt = trimmed,
+                                systemPrompt = systemPrompt,
+                                historyContents = historyContents,
+                                includeTools = false
+                            )
+                        } else {
+                            throw toolEx
+                        }
                     }
-                }
 
-                val finalText = extractResponseText(response)
-                if (finalText.isNotEmpty()) {
-                    lastFailedPrompt = null
-                    _textChatState.value = TextChatState.Streaming(finalText)
-                    aurixRepository.appendMessage(
-                        conversationId = convId,
-                        role = "model",
-                        content = finalText,
-                        inputMode = "TEXT",
-                        languageCode = settings.value.language.code
-                    )
-                    _textChatState.value = TextChatState.Idle
-                } else {
-                    val reason = buildEmptyResponseReason(response)
-                    Log.w(TAG, "Gemini returned empty text: $reason")
-                    _textChatState.value = TextChatState.Error(reason)
-                    _statusBanner.value = reason
+                    if (finalText.isNotBlank()) {
+                        lastFailedPrompt = null
+                        aurixRepository.appendMessage(
+                            conversationId = convId,
+                            role = "model",
+                            content = finalText.trim(),
+                            inputMode = "TEXT",
+                            languageCode = settings.value.language.code
+                        )
+                        _textChatState.value = TextChatState.Idle
+                    } else {
+                        val reason = if (updatedLang == AurixLanguage.ENGLISH) {
+                            "AURIX AI returned an empty response. Please tap Retry."
+                        } else {
+                            "AURIX AI কোনো উত্তর পাঠায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।"
+                        }
+                        Log.w(TAG, "Gemini returned empty text")
+                        _textChatState.value = TextChatState.Error(reason)
+                        _statusBanner.value = reason
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(TAG, "Text generation timed out after 60s", e)
+                    val timeoutMsg = if (updatedLang == AurixLanguage.ENGLISH) {
+                        "Request timed out after 60 seconds. Please check your internet connection and tap Retry."
+                    } else {
+                        "৬০ সেকেন্ডে উত্তর পাওয়া যায়নি (Timeout)। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।"
+                    }
+                    _textChatState.value = TextChatState.Error(timeoutMsg)
+                    _statusBanner.value = timeoutMsg
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Text generation failed", e)
+                    val errMsg = formatUserFriendlyAiError(e, updatedLang)
+                    _textChatState.value = TextChatState.Error(errMsg)
+                    _statusBanner.value = errMsg
                 }
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Text generation timed out after 60s", e)
-                val timeoutMsg = if (updatedLang == AurixLanguage.ENGLISH) {
-                    "Request timed out after 60 seconds. Please check your internet connection and tap Retry."
-                } else {
-                    "৬০ সেকেন্ডে উত্তর পাওয়া যায়নি (Timeout)। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।"
-                }
-                _textChatState.value = TextChatState.Error(timeoutMsg)
-                _statusBanner.value = timeoutMsg
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Text generation failed", e)
-                val errMsg = formatUserFriendlyAiError(e, updatedLang)
-                _textChatState.value = TextChatState.Error(errMsg)
-                _statusBanner.value = errMsg
             }
         }
     }
@@ -595,23 +635,41 @@ class AurixAssistantEngine private constructor(context: Context) {
         systemPrompt: String,
         historyContents: List<Content>,
         includeTools: Boolean
-    ): GenerateContentResponse {
+    ): String {
         val configuredModel: GenerativeModel = Firebase.ai.generativeModel(
             modelName = AurixIdentity.TEXT_MODEL_NAME,
             tools = if (includeTools) listOf(AurixTools.tool) else null,
             systemInstruction = content { text(systemPrompt) }
         )
         val chat = configuredModel.startChat(history = historyContents)
-        var response = withTimeout(60_000L) {
-            chat.sendMessage(prompt)
+
+        var lastResponse: GenerateContentResponse? = null
+        val textBuffer = StringBuilder()
+        val pendingCalls = mutableListOf<com.google.firebase.ai.type.FunctionCallPart>()
+
+        withTimeout(60_000L) {
+            chat.sendMessageStream(prompt).collect { chunk ->
+                lastResponse = chunk
+                val chunkText = extractResponseText(chunk)
+                if (chunkText.isNotEmpty()) {
+                    textBuffer.append(chunkText)
+                    _textChatState.value = TextChatState.Streaming(textBuffer.toString())
+                }
+                if (chunk.functionCalls.isNotEmpty()) {
+                    pendingCalls.addAll(chunk.functionCalls)
+                }
+            }
         }
 
         // Execute any tool calls returned by Gemini in a bounded loop
         var toolRound = 0
-        while (response.functionCalls.isNotEmpty() && toolRound < 4) {
+        while (pendingCalls.isNotEmpty() && toolRound < 4) {
             toolRound++
+            val callsToRun = pendingCalls.toList()
+            pendingCalls.clear()
+
             val responseParts = mutableListOf<FunctionResponsePart>()
-            for (call in response.functionCalls) {
+            for (call in callsToRun) {
                 val part = AurixTools.executeToolCall(
                     call = call,
                     automationManager = automationManager,
@@ -632,30 +690,48 @@ class AurixAssistantEngine private constructor(context: Context) {
                 )
                 responseParts.add(part)
             }
+
             val toolContent = content("function") {
                 responseParts.forEach { part(it) }
             }
-            response = withTimeout(60_000L) {
-                chat.sendMessage(toolContent)
+            withTimeout(60_000L) {
+                chat.sendMessageStream(toolContent).collect { chunk ->
+                    lastResponse = chunk
+                    val chunkText = extractResponseText(chunk)
+                    if (chunkText.isNotEmpty()) {
+                        if (textBuffer.isNotEmpty() && !textBuffer.endsWith("\n")) {
+                            textBuffer.append("\n")
+                        }
+                        textBuffer.append(chunkText)
+                        _textChatState.value = TextChatState.Streaming(textBuffer.toString())
+                    }
+                    if (chunk.functionCalls.isNotEmpty()) {
+                        pendingCalls.addAll(chunk.functionCalls)
+                    }
+                }
             }
         }
-        return response
+
+        val combined = textBuffer.toString().trim()
+        if (combined.isNotEmpty()) return combined
+        val fallbackLast = lastResponse ?: return ""
+        val fallbackText = extractResponseText(fallbackLast)
+        if (fallbackText.isNotEmpty()) return fallbackText
+        throw IllegalStateException(buildEmptyResponseReason(fallbackLast))
     }
 
     private fun extractResponseText(response: GenerateContentResponse): String {
-        val direct = response.text?.trim().orEmpty()
-        if (direct.isNotEmpty()) return direct
         val candidateText = response.candidates
             .firstOrNull()
             ?.content
             ?.parts
             ?.mapNotNull { part ->
-                (part as? com.google.firebase.ai.type.TextPart)?.text?.takeIf { it.isNotBlank() }
+                (part as? com.google.firebase.ai.type.TextPart)?.text?.takeIf { it.isNotEmpty() }
             }
-            ?.joinToString("\n")
-            ?.trim()
+            ?.joinToString("")
             .orEmpty()
-        return candidateText
+        if (candidateText.isNotEmpty()) return candidateText
+        return response.text.orEmpty()
     }
 
     private fun buildEmptyResponseReason(response: GenerateContentResponse): String {
@@ -676,7 +752,7 @@ class AurixAssistantEngine private constructor(context: Context) {
         return msg.contains("function_declaration") ||
             msg.contains("functiondeclaration") ||
             (msg.contains("parameters") && msg.contains("properties")) ||
-            msg.contains("tool") && msg.contains("invalid")
+            (msg.contains("tool") && (msg.contains("invalid") || msg.contains("schema")))
     }
 
     private fun formatUserFriendlyAiError(e: Exception, language: AurixLanguage): String {

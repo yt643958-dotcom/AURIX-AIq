@@ -54,6 +54,7 @@ class AurixViewModel(application: Application) : AndroidViewModel(application) {
     val textChatState: StateFlow<TextChatState> = engine.textChatState
     val statusBanner: StateFlow<String?> = engine.statusBanner
     val appCheckStatus: StateFlow<AppCheckStatus> = engine.appCheckStatus
+    val appCheckDiagnostic: StateFlow<String> = engine.appCheckDiagnostic
     val pendingConfirmation: StateFlow<PendingActionConfirmation?> = engine.pendingConfirmation
     val accessibilityConnected: StateFlow<Boolean> = engine.accessibilityConnected
     val lastScreenSnapshot: StateFlow<VisibleScreenSnapshot?> = AurixAccessibilityService.lastSnapshot
@@ -96,6 +97,7 @@ class AurixViewModel(application: Application) : AndroidViewModel(application) {
     fun retryLastMessage() = engine.retryLastMessage()
     fun clearTextChatError() = engine.clearTextChatError()
     fun clearStatusBanner() = engine.clearStatusBanner()
+    fun onMicPermissionDenied() = engine.notifyMicPermissionDenied()
 
     fun startNewConversation() = engine.startNewConversation()
     fun selectConversation(id: Long) = engine.selectConversation(id)

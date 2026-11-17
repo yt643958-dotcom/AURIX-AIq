@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             startVoiceAfterMicGrant = false
+            viewModel.onMicPermissionDenied()
         }
     }
 

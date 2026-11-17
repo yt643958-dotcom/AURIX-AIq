@@ -1,15 +1,19 @@
 package com.example
 
 import android.content.Context
+import android.content.Intent
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.ai.AurixTools
 import com.example.ai.ChatHistorySanitizer
 import com.example.automation.PhoneAutomationManager
+import com.example.core.AppCheckStateHolder
+import com.example.core.AppCheckStatus
 import com.example.core.AurixIdentity
 import com.example.core.AurixLanguage
 import com.example.core.AurixVoice
 import com.example.core.SystemPromptBuilder
+import com.example.core.configureAppCheck
 import com.example.data.local.AurixDatabase
 import com.example.data.local.AurixRepository
 import com.example.data.local.MessageEntity
@@ -133,5 +137,21 @@ class ExampleRobolectricTest {
         assertEquals(2, history.size)
         assertEquals("user", history[0].role)
         assertEquals("model", history[1].role)
+    }
+
+    @Test
+    fun `configureAppCheck uses reCAPTCHA on standalone launch without debug token and debug provider when intent token is provided`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("aurix_appcheck_meta", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+
+        configureAppCheck(context, Intent())
+        assertEquals(AppCheckStatus.RECAPTCHA_ACTIVE, AppCheckStateHolder.status)
+
+        val tokenIntent = Intent().putExtra("FIREBASE_APPCHECK_DEBUG_TOKEN", "00000000-0000-0000-0000-000000000000")
+        configureAppCheck(context, tokenIntent)
+        assertEquals(AppCheckStatus.DEBUG_ACTIVE, AppCheckStateHolder.status)
     }
 }

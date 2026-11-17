@@ -7,13 +7,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -58,9 +62,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ai.TextChatState
 import com.example.ai.VoiceSessionState
@@ -89,6 +96,7 @@ import com.example.ui.theme.AurixSurface
 import com.example.ui.theme.AurixTextPrimary
 import com.example.ui.theme.AurixTextSecondary
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantScreen(
     settings: AurixSettings,
@@ -121,17 +129,30 @@ fun AssistantScreen(
     var inputText by rememberSaveable { mutableStateOf("") }
     var orbExpanded by rememberSaveable { mutableStateOf(true) }
     val listState = rememberLazyListState()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val isImeVisible = WindowInsets.isImeVisible
 
     val isVoiceActive = voiceState == VoiceSessionState.LISTENING ||
         voiceState == VoiceSessionState.SPEAKING ||
         voiceState == VoiceSessionState.MUTED ||
         voiceState == VoiceSessionState.CONNECTING
 
-    LaunchedEffect(messages.size, textChatState) {
+    val submitText: (String) -> Unit = { raw ->
+        val trimmed = raw.trim()
+        if (trimmed.isNotEmpty()) {
+            orbExpanded = false
+            keyboardController?.hide()
+            focusManager.clearFocus()
+            onSendText(trimmed)
+        }
+    }
+
+    LaunchedEffect(messages.size, textChatState, isImeVisible) {
         val extra = if (textChatState !is TextChatState.Idle) 1 else 0
-        val targetIndex = (messages.size + extra - 1).coerceAtLeast(0)
-        if (messages.isNotEmpty() || extra > 0) {
-            listState.animateScrollToItem(targetIndex)
+        val total = messages.size + extra
+        if (total > 0) {
+            listState.animateScrollToItem((total - 1).coerceAtLeast(0))
         }
     }
 
@@ -227,6 +248,8 @@ fun AssistantScreen(
                         text = statusBanner.orEmpty(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = AurixTextPrimary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = onDismissBanner, modifier = Modifier.size(36.dp)) {
@@ -298,13 +321,13 @@ fun AssistantScreen(
                     }
                 }
 
-                AnimatedVisibility(visible = orbExpanded) {
+                AnimatedVisibility(visible = orbExpanded && (!isImeVisible || isVoiceActive)) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         AurixVoiceOrb(
                             voiceState = voiceState,
                             micAmplitude = micAmplitude,
                             aiAmplitude = aiAmplitude,
-                            orbSize = if (messages.isEmpty()) 172.dp else 128.dp,
+                            orbSize = if (messages.isEmpty()) 160.dp else 118.dp,
                             onClick = {
                                 if (isVoiceActive) {
                                     onStopVoice()
@@ -408,13 +431,14 @@ fun AssistantScreen(
                 contentPadding = PaddingValues(vertical = 10.dp),
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 120.dp)
                     .fillMaxWidth()
             ) {
                 if (messages.isEmpty()) {
                     item {
                         AurixEmptyHero(
                             language = settings.language,
-                            onPromptClick = { onSendText(it) }
+                            onPromptClick = { submitText(it) }
                         )
                     }
                 } else {
@@ -591,9 +615,10 @@ fun AssistantScreen(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
                         onSend = {
-                            if (inputText.isNotBlank()) {
-                                onSendText(inputText)
+                            if (inputText.isNotBlank() && textChatState !is TextChatState.Sending) {
+                                val msg = inputText
                                 inputText = ""
+                                submitText(msg)
                             }
                         }
                     ),
@@ -611,26 +636,43 @@ fun AssistantScreen(
                         .testTag("chat_input_field")
                 )
 
+                val isSendingNow = textChatState is TextChatState.Sending
                 IconButton(
+                    enabled = inputText.isNotBlank() && !isSendingNow,
                     onClick = {
-                        if (inputText.isNotBlank()) {
-                            onSendText(inputText)
+                        if (inputText.isNotBlank() && !isSendingNow) {
+                            val msg = inputText
                             inputText = ""
+                            submitText(msg)
                         }
                     },
                     modifier = Modifier
                         .size(50.dp)
                         .clip(CircleShape)
                         .background(
-                            Brush.linearGradient(listOf(AurixElectricBlue, AurixNeonPurple))
+                            Brush.linearGradient(
+                                if (inputText.isNotBlank() && !isSendingNow) {
+                                    listOf(AurixElectricBlue, AurixNeonPurple)
+                                } else {
+                                    listOf(AurixSurface, AurixSurface)
+                                }
+                            )
                         )
                         .testTag("send_button")
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send message",
-                        tint = Color.White
-                    )
+                    if (isSendingNow) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            color = AurixNeonCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send message",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }

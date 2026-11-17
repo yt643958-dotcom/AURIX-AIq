@@ -52,7 +52,7 @@ class LiveAudioEngine(
     private val onInterrupted: () -> Unit,
     private val onToolCall: suspend (FunctionCallPart) -> FunctionResponsePart,
     private val onSessionError: (String) -> Unit,
-    private val onSessionClosed: () -> Unit
+    private val onSessionClosed: (hadServerResponse: Boolean) -> Unit
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -205,8 +205,10 @@ class LiveAudioEngine(
 
         // Receive loop -> play 24kHz PCM, emit transcriptions, handle VAD interruptions & tool calls
         receiveJob = scope.launch {
+            var receivedServerMessage = false
             try {
                 session.receive().collect { message: LiveServerMessage ->
+                    receivedServerMessage = true
                     when (message) {
                         is LiveServerContent -> {
                             if (message.interrupted) {
@@ -263,7 +265,7 @@ class LiveAudioEngine(
                         }
                     }
                 }
-                onSessionClosed()
+                onSessionClosed(receivedServerMessage)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

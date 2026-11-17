@@ -12,7 +12,8 @@ object AurixIdentity {
     const val OWNER_ANSWER_BN =
         "আমার মালিক ও নির্মাতা হলেন RIAD। তিনিই AURIX AI-এর পেছনের মানুষ।"
 
-    const val LIVE_MODEL_NAME = "gemini-2.5-flash-native-audio-preview-12-2025"
+    const val LIVE_MODEL_NAME = "gemini-3.1-flash-live-preview"
+    const val LIVE_FALLBACK_MODEL_NAME = "gemini-2.5-flash-native-audio-preview-12-2025"
     const val TEXT_MODEL_NAME = "gemini-3.8-flash"
 }
 

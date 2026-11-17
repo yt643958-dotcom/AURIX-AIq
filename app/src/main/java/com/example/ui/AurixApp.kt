@@ -96,6 +96,7 @@ fun AurixApp(
     val textChatState by viewModel.textChatState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
     val appCheckStatus by viewModel.appCheckStatus.collectAsStateWithLifecycle()
+    val appCheckDiagnostic by viewModel.appCheckDiagnostic.collectAsStateWithLifecycle()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val lastSnapshot by viewModel.lastScreenSnapshot.collectAsStateWithLifecycle()
 
@@ -265,7 +266,7 @@ fun AurixApp(
                             settings = settings,
                             permissions = permissions,
                             appCheckStatus = appCheckStatus,
-                            appCheckDiagnostic = viewModel.getAppCheckDiagnostic(),
+                            appCheckDiagnostic = appCheckDiagnostic,
                             totalMessageCount = totalMessageCount,
                             memoryCount = memoryFacts.size,
                             onSelectLanguage = { viewModel.updateLanguage(it) },
