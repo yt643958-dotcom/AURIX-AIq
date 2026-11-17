@@ -267,7 +267,10 @@ fun SettingsScreen(
             InfoLine("Backend", "Firebase AI Logic (App Check Protected)")
             InfoLine("App Check", appCheckDiagnostic, valueColor = badgeColor)
             InfoLine("Live Voice Model", AurixIdentity.LIVE_MODEL_NAME)
-            InfoLine("Text Reasoning Model", AurixIdentity.TEXT_MODEL_NAME)
+            InfoLine(
+                "Text Models",
+                "${AurixIdentity.TEXT_MODEL_NAME} / ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME}"
+            )
         }
 
         // 10. Privacy Settings

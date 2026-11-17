@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.ai.AurixAssistantEngine
 import com.example.ai.AurixTools
 import com.example.ai.ChatHistorySanitizer
 import com.example.automation.PhoneAutomationManager
@@ -152,5 +153,19 @@ class ExampleRobolectricTest {
         val tokenIntent = Intent().putExtra("FIREBASE_APPCHECK_DEBUG_TOKEN", "00000000-0000-0000-0000-000000000000")
         configureAppCheck(context, tokenIntent)
         assertEquals(AppCheckStatus.DEBUG_ACTIVE, AppCheckStateHolder.status)
+    }
+
+    @Test
+    fun `quota exceeded error triggers fallback model and parses retry window`() {
+        val quotaMsg =
+            "You exceeded your current quota, please check your plan and billing details. " +
+                "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, " +
+                "limit: 20, model: gemini-3.8-flash. Please retry in 22h6m22.78s."
+        val err = IllegalStateException(quotaMsg)
+        assertTrue(AurixAssistantEngine.isQuotaError(err))
+        assertTrue(AurixAssistantEngine.isRetryableModelFailure(err))
+        val cooldown = AurixAssistantEngine.parseRetryAfterMs(err)
+        assertNotNull(cooldown)
+        assertEquals(6L * 60L * 60L * 1000L, cooldown)
     }
 }

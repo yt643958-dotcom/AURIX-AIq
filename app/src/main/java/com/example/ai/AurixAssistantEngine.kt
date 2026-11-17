@@ -609,14 +609,12 @@ class AurixAssistantEngine private constructor(context: Context) {
                         "সার্ভার থেকে উত্তর আসতে বেশি সময় লাগছে (Timeout)। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।"
                     }
                     _textChatState.value = TextChatState.Error(timeoutMsg)
-                    _statusBanner.value = timeoutMsg
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Text generation failed", e)
                     val errMsg = formatUserFriendlyAiError(e, updatedLang)
                     _textChatState.value = TextChatState.Error(errMsg)
-                    _statusBanner.value = errMsg
                 }
             }
         }
@@ -628,20 +626,32 @@ class AurixAssistantEngine private constructor(context: Context) {
         systemPrompt: String,
         historyContents: List<Content>
     ): String {
-        val attempts = listOf(
-            TextAttemptConfig(
-                modelName = AurixIdentity.TEXT_MODEL_NAME,
-                includeTools = true,
-                useMinimalThinking = true,
-                timeoutMs = 30_000L
-            ),
-            TextAttemptConfig(
-                modelName = AurixIdentity.TEXT_FALLBACK_MODEL_NAME,
-                includeTools = true,
-                useMinimalThinking = false,
-                timeoutMs = 28_000L
-            )
+        val now = System.currentTimeMillis()
+        val primaryCooldownUntil = quotaPrefs.getLong(KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL, 0L)
+        val skipPrimaryForCooldown = now < primaryCooldownUntil
+
+        val primaryAttempt = TextAttemptConfig(
+            modelName = AurixIdentity.TEXT_MODEL_NAME,
+            includeTools = true,
+            useMinimalThinking = true,
+            timeoutMs = 26_000L
         )
+        val fallbackAttempt = TextAttemptConfig(
+            modelName = AurixIdentity.TEXT_FALLBACK_MODEL_NAME,
+            includeTools = true,
+            useMinimalThinking = false,
+            timeoutMs = 28_000L
+        )
+
+        val attempts = if (skipPrimaryForCooldown) {
+            Log.i(
+                TAG,
+                "Primary model ${AurixIdentity.TEXT_MODEL_NAME} is in quota cooldown; routing directly to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME}"
+            )
+            listOf(fallbackAttempt)
+        } else {
+            listOf(primaryAttempt, fallbackAttempt)
+        }
 
         var lastError: Exception? = null
         for ((index, attempt) in attempts.withIndex()) {
@@ -667,13 +677,24 @@ class AurixAssistantEngine private constructor(context: Context) {
                 throw e
             } catch (e: Exception) {
                 lastError = e
-                val shouldTryFallback = index == 0 && isRetryableModelFailure(e)
+                if (attempt.modelName == AurixIdentity.TEXT_MODEL_NAME && isQuotaError(e)) {
+                    val cooldownMs = parseRetryAfterMs(e) ?: DEFAULT_PRIMARY_QUOTA_COOLDOWN_MS
+                    quotaPrefs.edit()
+                        .putLong(KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL, System.currentTimeMillis() + cooldownMs)
+                        .commit()
+                    Log.w(
+                        TAG,
+                        "Primary model ${attempt.modelName} hit quota limit; caching fallback to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME} for ${cooldownMs / 1000}s"
+                    )
+                }
+                val hasNextAttempt = index < attempts.lastIndex
+                val shouldTryFallback = hasNextAttempt && isRetryableModelFailure(e)
                 if (!shouldTryFallback) {
                     throw e
                 }
                 Log.w(
                     TAG,
-                    "Primary text model ${attempt.modelName} failed (${e.message}); switching to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME}",
+                    "Text model ${attempt.modelName} failed (${e.message}); switching to ${attempts[index + 1].modelName}",
                     e
                 )
             }
@@ -703,7 +724,7 @@ class AurixAssistantEngine private constructor(context: Context) {
         } catch (e: CancellationException) {
             throw e
         } catch (ex: Exception) {
-            if (attempt.useMinimalThinking && isThinkingConfigRejection(ex)) {
+            if (!isQuotaError(ex) && attempt.useMinimalThinking && isThinkingConfigRejection(ex)) {
                 Log.w(TAG, "ThinkingConfig rejected for ${attempt.modelName}, retrying without thinkingConfig", ex)
                 executeTextChatTurn(
                     convId = convId,
@@ -715,7 +736,7 @@ class AurixAssistantEngine private constructor(context: Context) {
                     useMinimalThinking = false,
                     timeoutMs = attempt.timeoutMs
                 )
-            } else if (attempt.includeTools && isToolSchemaRejection(ex)) {
+            } else if (!isQuotaError(ex) && attempt.includeTools && isToolSchemaRejection(ex)) {
                 Log.w(TAG, "Tool declaration rejected by API for ${attempt.modelName}, retrying without tools", ex)
                 executeTextChatTurn(
                     convId = convId,
@@ -888,8 +909,12 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
     }
 
+    private val quotaPrefs by lazy {
+        appContext.getSharedPreferences(PREFS_MODEL_QUOTA, Context.MODE_PRIVATE)
+    }
+
     private fun isToolSchemaRejection(e: Throwable): Boolean {
-        val msg = (e.message ?: e.cause?.message).orEmpty().lowercase()
+        val msg = collectErrorText(e)
         return msg.contains("function_declaration") ||
             msg.contains("functiondeclaration") ||
             (msg.contains("parameters") && msg.contains("properties")) ||
@@ -897,20 +922,8 @@ class AurixAssistantEngine private constructor(context: Context) {
     }
 
     private fun isThinkingConfigRejection(e: Throwable): Boolean {
-        val msg = (e.message ?: e.cause?.message).orEmpty().lowercase()
+        val msg = collectErrorText(e)
         return msg.contains("thinking") && (msg.contains("unsupported") || msg.contains("invalid") || msg.contains("unknown"))
-    }
-
-    private fun isRetryableModelFailure(e: Throwable): Boolean {
-        val msg = (e.message ?: e.cause?.message).orEmpty().lowercase()
-        return msg.contains("not found") ||
-            msg.contains("404") ||
-            msg.contains("503") ||
-            msg.contains("504") ||
-            msg.contains("429") ||
-            msg.contains("unavailable") ||
-            msg.contains("overloaded") ||
-            msg.contains("timeout")
     }
 
     private fun hasActiveInternetConnection(): Boolean {
@@ -927,8 +940,15 @@ class AurixAssistantEngine private constructor(context: Context) {
 
     private fun formatUserFriendlyAiError(e: Exception, language: AurixLanguage): String {
         val raw = e.localizedMessage ?: e.message ?: "Unknown error"
-        val lower = raw.lowercase()
+        val lower = collectErrorText(e)
         return when {
+            isQuotaError(e) -> {
+                if (language == AurixLanguage.ENGLISH) {
+                    "Free-tier AI quota limit has been reached for now. Please wait and retry later, or check your Gemini API plan/rate limits.\n\nDetails: $raw"
+                } else {
+                    "এই প্রজেক্টের ফ্রি AI ব্যবহারের সীমা (Quota) আপাতত শেষ হয়ে গেছে। কিছুক্ষণ পর আবার চেষ্টা করুন অথবা Google AI Studio-তে আপনার প্ল্যান/রেট-লিমিট চেক করুন।\n\nবিস্তারিত: $raw"
+                }
+            }
             lower.contains("403") || lower.contains("app check") || lower.contains("appcheck") -> {
                 if (language == AurixLanguage.ENGLISH) {
                     "App Check / Authorization error (403): $raw"
@@ -1082,6 +1102,11 @@ class AurixAssistantEngine private constructor(context: Context) {
     }
 
     companion object {
+        private const val PREFS_MODEL_QUOTA = "aurix_model_quota_prefs"
+        private const val KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL = "primary_quota_cooldown_until"
+        private const val DEFAULT_PRIMARY_QUOTA_COOLDOWN_MS = 30 * 60 * 1000L
+        private const val MAX_PRIMARY_QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000L
+
         @Volatile
         private var INSTANCE: AurixAssistantEngine? = null
 
@@ -1089,6 +1114,57 @@ class AurixAssistantEngine private constructor(context: Context) {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: AurixAssistantEngine(context).also { INSTANCE = it }
             }
+        }
+
+        internal fun collectErrorText(e: Throwable?): String {
+            if (e == null) return ""
+            val sb = StringBuilder()
+            var cur: Throwable? = e
+            var depth = 0
+            while (cur != null && depth < 5) {
+                sb.append(cur::class.java.simpleName).append(' ')
+                sb.append(cur.message.orEmpty()).append(' ')
+                cur = cur.cause
+                depth++
+            }
+            return sb.toString().lowercase()
+        }
+
+        internal fun isQuotaError(e: Throwable?): Boolean {
+            val text = collectErrorText(e)
+            return text.contains("quotaexceeded") ||
+                text.contains("quota") ||
+                text.contains("exceeded") ||
+                text.contains("rate-limit") ||
+                text.contains("rate limit") ||
+                text.contains("resource_exhausted") ||
+                text.contains("resourceexhausted") ||
+                text.contains("too many requests") ||
+                text.contains("429")
+        }
+
+        internal fun isRetryableModelFailure(e: Throwable?): Boolean {
+            val text = collectErrorText(e)
+            return isQuotaError(e) ||
+                text.contains("not found") ||
+                text.contains("404") ||
+                text.contains("503") ||
+                text.contains("504") ||
+                text.contains("unavailable") ||
+                text.contains("overloaded") ||
+                text.contains("timeout")
+        }
+
+        internal fun parseRetryAfterMs(e: Throwable?): Long? {
+            val text = collectErrorText(e)
+            val match = Regex("retry in\\s+(?:(\\d+)h)?(?:(\\d+)m)?(?:(\\d+(?:\\.\\d+)?)s)?")
+                .find(text) ?: return null
+            val hours = match.groupValues[1].toLongOrNull() ?: 0L
+            val mins = match.groupValues[2].toLongOrNull() ?: 0L
+            val secs = match.groupValues[3].toDoubleOrNull()?.toLong() ?: 0L
+            val totalMs = ((hours * 3600L) + (mins * 60L) + secs) * 1000L
+            if (totalMs <= 0L) return null
+            return totalMs.coerceAtMost(MAX_PRIMARY_QUOTA_COOLDOWN_MS)
         }
     }
 }
