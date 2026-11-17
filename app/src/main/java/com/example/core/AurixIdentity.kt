@@ -15,6 +15,7 @@ object AurixIdentity {
     const val LIVE_MODEL_NAME = "gemini-3.1-flash-live-preview"
     const val LIVE_FALLBACK_MODEL_NAME = "gemini-2.5-flash-native-audio-preview-12-2025"
     const val TEXT_MODEL_NAME = "gemini-3.8-flash"
+    const val TEXT_FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 }
 
 enum class AurixLanguage(

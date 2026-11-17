@@ -2,6 +2,7 @@ package com.example.core
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.example.BuildConfig
 import com.google.firebase.FirebaseApp
@@ -82,15 +83,19 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     "Debug App Check active (token injected)"
                 )
                 Log.d(TAG, "DebugAppCheckProviderFactory installed with injected token.")
-            } else if (metaPrefs.getBoolean(META_INJECTED_DEBUG_KEY, false)) {
+            } else if (metaPrefs.getBoolean(META_INJECTED_DEBUG_KEY, false) || isAndroidEmulator()) {
                 appCheck.installAppCheckProviderFactory(
                     DebugAppCheckProviderFactory.getInstance()
                 )
                 AppCheckStateHolder.update(
                     AppCheckStatus.DEBUG_ACTIVE,
-                    "Debug App Check active (persisted token)"
+                    if (metaPrefs.getBoolean(META_INJECTED_DEBUG_KEY, false)) {
+                        "Debug App Check active (persisted token)"
+                    } else {
+                        "Debug App Check active (emulator)"
+                    }
                 )
-                Log.d(TAG, "DebugAppCheckProviderFactory installed with persisted debug token.")
+                Log.d(TAG, "DebugAppCheckProviderFactory installed.")
             } else {
                 // Standalone debug APK on a physical device has no harness debug token; use provisioned reCAPTCHA Enterprise if available.
                 val installedRecaptcha = installRecaptchaProvider(context, appCheck)
@@ -174,4 +179,22 @@ private fun installRecaptchaProvider(context: Context, appCheck: FirebaseAppChec
     )
     Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
     return true
+}
+
+private fun isAndroidEmulator(): Boolean {
+    if (Build.FINGERPRINT.equals("robolectric", ignoreCase = true)) {
+        return false
+    }
+    return Build.FINGERPRINT.startsWith("generic") ||
+        Build.FINGERPRINT.startsWith("unknown") ||
+        Build.MODEL.contains("google_sdk") ||
+        Build.MODEL.contains("Emulator") ||
+        Build.MODEL.contains("Android SDK built for") ||
+        Build.MANUFACTURER.contains("Genymotion") ||
+        Build.HARDWARE.contains("goldfish") ||
+        Build.HARDWARE.contains("ranchu") ||
+        Build.PRODUCT.contains("sdk_gphone") ||
+        Build.PRODUCT.contains("emulator") ||
+        Build.PRODUCT.contains("simulator") ||
+        (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
 }

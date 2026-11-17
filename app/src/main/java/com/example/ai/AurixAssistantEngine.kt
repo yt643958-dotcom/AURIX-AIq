@@ -1,6 +1,8 @@
 package com.example.ai
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import com.example.automation.AurixAccessibilityService
 import com.example.automation.PendingActionConfirmation
@@ -32,12 +34,16 @@ import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.PublicPreviewAPI
 import com.google.firebase.ai.type.RealtimeInputConfig
+import com.google.firebase.ai.type.RequestOptions
 import com.google.firebase.ai.type.ResponseModality
 import com.google.firebase.ai.type.SlidingWindow
 import com.google.firebase.ai.type.SpeechConfig
+import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.Voice
 import com.google.firebase.ai.type.content
+import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.liveGenerationConfig
+import com.google.firebase.ai.type.thinkingConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -565,28 +571,12 @@ class AurixAssistantEngine private constructor(context: Context) {
                     val allMessages = aurixRepository.getMessagesOnce(convId)
                     val historyContents = ChatHistorySanitizer.buildChatHistoryBeforeCurrentPrompt(allMessages)
 
-                    val finalText = try {
-                        executeTextChatTurn(
-                            convId = convId,
-                            prompt = trimmed,
-                            systemPrompt = systemPrompt,
-                            historyContents = historyContents,
-                            includeTools = true
-                        )
-                    } catch (toolEx: Exception) {
-                        if (isToolSchemaRejection(toolEx)) {
-                            Log.w(TAG, "Tool declaration rejected by API, retrying turn without tools", toolEx)
-                            executeTextChatTurn(
-                                convId = convId,
-                                prompt = trimmed,
-                                systemPrompt = systemPrompt,
-                                historyContents = historyContents,
-                                includeTools = false
-                            )
-                        } else {
-                            throw toolEx
-                        }
-                    }
+                    val finalText = generateTextReplyWithFallback(
+                        convId = convId,
+                        prompt = trimmed,
+                        systemPrompt = systemPrompt,
+                        historyContents = historyContents
+                    )
 
                     if (finalText.isNotBlank()) {
                         lastFailedPrompt = null
@@ -609,11 +599,18 @@ class AurixAssistantEngine private constructor(context: Context) {
                         _statusBanner.value = reason
                     }
                 } catch (e: TimeoutCancellationException) {
-                    Log.e(TAG, "Text generation timed out after 60s", e)
-                    val timeoutMsg = if (updatedLang == AurixLanguage.ENGLISH) {
-                        "Request timed out after 60 seconds. Please check your internet connection and tap Retry."
+                    Log.e(TAG, "Text generation timed out after fallback attempts", e)
+                    val offline = !hasActiveInternetConnection()
+                    val timeoutMsg = if (offline) {
+                        if (updatedLang == AurixLanguage.ENGLISH) {
+                            "Device appears offline. Please turn on Wi-Fi or mobile data and tap Retry."
+                        } else {
+                            "ফোনে ইন্টারনেট সংযোগ নেই। Wi-Fi বা মোবাইল ডেটা চালু করে আবার চেষ্টা করুন।"
+                        }
+                    } else if (updatedLang == AurixLanguage.ENGLISH) {
+                        "Request timed out waiting for Gemini. Please check your internet connection and tap Retry."
                     } else {
-                        "৬০ সেকেন্ডে উত্তর পাওয়া যায়নি (Timeout)। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।"
+                        "সার্ভার থেকে উত্তর আসতে বেশি সময় লাগছে (Timeout)। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।"
                     }
                     _textChatState.value = TextChatState.Error(timeoutMsg)
                     _statusBanner.value = timeoutMsg
@@ -629,17 +626,149 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
     }
 
+    private suspend fun generateTextReplyWithFallback(
+        convId: Long,
+        prompt: String,
+        systemPrompt: String,
+        historyContents: List<Content>
+    ): String {
+        val attempts = listOf(
+            TextAttemptConfig(
+                modelName = AurixIdentity.TEXT_MODEL_NAME,
+                includeTools = true,
+                useMinimalThinking = true,
+                timeoutMs = 30_000L
+            ),
+            TextAttemptConfig(
+                modelName = AurixIdentity.TEXT_FALLBACK_MODEL_NAME,
+                includeTools = true,
+                useMinimalThinking = false,
+                timeoutMs = 28_000L
+            )
+        )
+
+        var lastError: Exception? = null
+        for ((index, attempt) in attempts.withIndex()) {
+            try {
+                if (index > 0) {
+                    _textChatState.value = TextChatState.Sending
+                }
+                return executeTextChatTurnWithSchemaRetry(
+                    convId = convId,
+                    prompt = prompt,
+                    systemPrompt = systemPrompt,
+                    historyContents = historyContents,
+                    attempt = attempt
+                )
+            } catch (e: TimeoutCancellationException) {
+                lastError = e
+                Log.w(
+                    TAG,
+                    "Text attempt ${index + 1} (${attempt.modelName}) timed out after ${attempt.timeoutMs}ms",
+                    e
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                val shouldTryFallback = index == 0 && isRetryableModelFailure(e)
+                if (!shouldTryFallback) {
+                    throw e
+                }
+                Log.w(
+                    TAG,
+                    "Primary text model ${attempt.modelName} failed (${e.message}); switching to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME}",
+                    e
+                )
+            }
+        }
+
+        throw (lastError ?: IllegalStateException("Text generation failed across all models."))
+    }
+
+    private suspend fun executeTextChatTurnWithSchemaRetry(
+        convId: Long,
+        prompt: String,
+        systemPrompt: String,
+        historyContents: List<Content>,
+        attempt: TextAttemptConfig
+    ): String {
+        return try {
+            executeTextChatTurn(
+                convId = convId,
+                prompt = prompt,
+                systemPrompt = systemPrompt,
+                historyContents = historyContents,
+                modelName = attempt.modelName,
+                includeTools = attempt.includeTools,
+                useMinimalThinking = attempt.useMinimalThinking,
+                timeoutMs = attempt.timeoutMs
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (ex: Exception) {
+            if (attempt.useMinimalThinking && isThinkingConfigRejection(ex)) {
+                Log.w(TAG, "ThinkingConfig rejected for ${attempt.modelName}, retrying without thinkingConfig", ex)
+                executeTextChatTurn(
+                    convId = convId,
+                    prompt = prompt,
+                    systemPrompt = systemPrompt,
+                    historyContents = historyContents,
+                    modelName = attempt.modelName,
+                    includeTools = attempt.includeTools,
+                    useMinimalThinking = false,
+                    timeoutMs = attempt.timeoutMs
+                )
+            } else if (attempt.includeTools && isToolSchemaRejection(ex)) {
+                Log.w(TAG, "Tool declaration rejected by API for ${attempt.modelName}, retrying without tools", ex)
+                executeTextChatTurn(
+                    convId = convId,
+                    prompt = prompt,
+                    systemPrompt = systemPrompt,
+                    historyContents = historyContents,
+                    modelName = attempt.modelName,
+                    includeTools = false,
+                    useMinimalThinking = attempt.useMinimalThinking,
+                    timeoutMs = attempt.timeoutMs
+                )
+            } else {
+                throw ex
+            }
+        }
+    }
+
     private suspend fun executeTextChatTurn(
         convId: Long,
         prompt: String,
         systemPrompt: String,
         historyContents: List<Content>,
-        includeTools: Boolean
+        modelName: String,
+        includeTools: Boolean,
+        useMinimalThinking: Boolean,
+        timeoutMs: Long
     ): String {
-        val configuredModel: GenerativeModel = Firebase.ai.generativeModel(
-            modelName = AurixIdentity.TEXT_MODEL_NAME,
+        val startedAt = System.currentTimeMillis()
+        Log.d(
+            TAG,
+            "Starting text turn model=$modelName includeTools=$includeTools minimalThinking=$useMinimalThinking history=${historyContents.size}"
+        )
+
+        val genConfig = if (useMinimalThinking) {
+            generationConfig {
+                thinkingConfig = thinkingConfig {
+                    thinkingLevel = ThinkingLevel.LOW
+                }
+            }
+        } else {
+            null
+        }
+
+        val configuredModel: GenerativeModel = Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
+            modelName = modelName,
+            generationConfig = genConfig,
             tools = if (includeTools) listOf(AurixTools.tool) else null,
-            systemInstruction = content { text(systemPrompt) }
+            systemInstruction = content { text(systemPrompt) },
+            requestOptions = RequestOptions(timeoutMs)
         )
         val chat = configuredModel.startChat(history = historyContents)
 
@@ -647,18 +776,31 @@ class AurixAssistantEngine private constructor(context: Context) {
         val textBuffer = StringBuilder()
         val pendingCalls = mutableListOf<com.google.firebase.ai.type.FunctionCallPart>()
 
-        withTimeout(60_000L) {
-            chat.sendMessageStream(prompt).collect { chunk ->
-                lastResponse = chunk
-                val chunkText = extractResponseText(chunk)
-                if (chunkText.isNotEmpty()) {
-                    textBuffer.append(chunkText)
-                    _textChatState.value = TextChatState.Streaming(textBuffer.toString())
-                }
-                if (chunk.functionCalls.isNotEmpty()) {
-                    pendingCalls.addAll(chunk.functionCalls)
+        try {
+            withTimeout(timeoutMs) {
+                chat.sendMessageStream(prompt).collect { chunk ->
+                    if (lastResponse == null) {
+                        Log.d(TAG, "First stream chunk from $modelName in ${System.currentTimeMillis() - startedAt}ms")
+                    }
+                    lastResponse = chunk
+                    val chunkText = extractResponseText(chunk)
+                    if (chunkText.isNotEmpty()) {
+                        textBuffer.append(chunkText)
+                        _textChatState.value = TextChatState.Streaming(textBuffer.toString())
+                    }
+                    if (chunk.functionCalls.isNotEmpty()) {
+                        pendingCalls.addAll(chunk.functionCalls)
+                    }
                 }
             }
+        } catch (timeout: TimeoutCancellationException) {
+            // If partial text already streamed before timeout, return it instead of discarding the reply.
+            val partial = textBuffer.toString().trim()
+            if (partial.isNotEmpty()) {
+                Log.w(TAG, "Stream timed out after receiving ${partial.length} chars; returning partial text.")
+                return partial
+            }
+            throw timeout
         }
 
         // Execute any tool calls returned by Gemini in a bounded loop
@@ -694,7 +836,7 @@ class AurixAssistantEngine private constructor(context: Context) {
             val toolContent = content("function") {
                 responseParts.forEach { part(it) }
             }
-            withTimeout(60_000L) {
+            withTimeout(timeoutMs) {
                 chat.sendMessageStream(toolContent).collect { chunk ->
                     lastResponse = chunk
                     val chunkText = extractResponseText(chunk)
@@ -713,7 +855,10 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
 
         val combined = textBuffer.toString().trim()
-        if (combined.isNotEmpty()) return combined
+        if (combined.isNotEmpty()) {
+            Log.d(TAG, "Completed text turn with $modelName in ${System.currentTimeMillis() - startedAt}ms")
+            return combined
+        }
         val fallbackLast = lastResponse ?: return ""
         val fallbackText = extractResponseText(fallbackLast)
         if (fallbackText.isNotEmpty()) return fallbackText
@@ -755,6 +900,35 @@ class AurixAssistantEngine private constructor(context: Context) {
             (msg.contains("tool") && (msg.contains("invalid") || msg.contains("schema")))
     }
 
+    private fun isThinkingConfigRejection(e: Throwable): Boolean {
+        val msg = (e.message ?: e.cause?.message).orEmpty().lowercase()
+        return msg.contains("thinking") && (msg.contains("unsupported") || msg.contains("invalid") || msg.contains("unknown"))
+    }
+
+    private fun isRetryableModelFailure(e: Throwable): Boolean {
+        val msg = (e.message ?: e.cause?.message).orEmpty().lowercase()
+        return msg.contains("not found") ||
+            msg.contains("404") ||
+            msg.contains("503") ||
+            msg.contains("504") ||
+            msg.contains("429") ||
+            msg.contains("unavailable") ||
+            msg.contains("overloaded") ||
+            msg.contains("timeout")
+    }
+
+    private fun hasActiveInternetConnection(): Boolean {
+        return try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return true
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     private fun formatUserFriendlyAiError(e: Exception, language: AurixLanguage): String {
         val raw = e.localizedMessage ?: e.message ?: "Unknown error"
         val lower = raw.lowercase()
@@ -776,6 +950,13 @@ class AurixAssistantEngine private constructor(context: Context) {
             else -> raw
         }
     }
+
+    private data class TextAttemptConfig(
+        val modelName: String,
+        val includeTools: Boolean,
+        val useMinimalThinking: Boolean,
+        val timeoutMs: Long
+    )
 
     fun approvePendingConfirmation() {
         scope.launch {
