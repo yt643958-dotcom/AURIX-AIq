@@ -324,7 +324,7 @@ fun PendingActionConfirmationCard(
             ) {
                 Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Approve & ${pending.buttonLabelToClick}")
+                Text("Copy & Open ${pending.appName}")
             }
         }
     }
@@ -342,7 +342,7 @@ fun AurixEmptyHero(
             "Who is your owner?",
             "What is RIAD's Facebook?",
             "Open YouTube",
-            "Open Facebook, read the post and suggest a Bengali comment",
+            "Draft a nice Bengali Facebook comment for me",
             "বাংলায় কথা বলো"
         )
     } else {
@@ -350,7 +350,7 @@ fun AurixEmptyHero(
             "কেমন আছো AURIX?",
             "তোমার মালিক কে?",
             "RIAD-এর Facebook লিংক দাও",
-            "Facebook খুলে সামনে যে পোস্টটা আছে সেটা পড়ো এবং একটা সুন্দর কমেন্ট লিখে দাও।",
+            "Facebook-এ দেওয়ার জন্য একটা সুন্দর বাংলা কমেন্ট লিখে দাও।",
             "Speak English"
         )
     }

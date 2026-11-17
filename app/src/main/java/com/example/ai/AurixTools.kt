@@ -27,9 +27,9 @@ object AurixTools {
 
     private val openSettingsDecl = FunctionDeclaration(
         name = "open_settings",
-        description = "Opens a supported Android settings screen (wifi, bluetooth, sound, display, battery, accessibility, location, general).",
+        description = "Opens a supported Android settings screen (wifi, bluetooth, sound, display, battery, location, general).",
         parameters = mapOf(
-            "setting_type" to Schema.string("Type of phone setting to open, e.g., wifi, bluetooth, sound, display, accessibility, general")
+            "setting_type" to Schema.string("Type of phone setting to open, e.g., wifi, bluetooth, sound, display, general")
         )
     )
 
@@ -41,34 +41,14 @@ object AurixTools {
         )
     )
 
-    private val readScreenDecl = FunctionDeclaration(
-        name = "read_screen",
-        description = "Reads visible text and posts on the currently open screen using the authorized AURIX Accessibility Service.",
-        parameters = mapOf(
-            "detail_level" to Schema.enumeration(
-                values = listOf("full", "summary"),
-                description = "Optional detail level of visible screen text to capture, defaults to full"
-            )
-        ),
-        optionalParameters = listOf("detail_level")
-    )
-
-    private val scrollScreenDecl = FunctionDeclaration(
-        name = "scroll_screen",
-        description = "Scrolls the current screen down or up using the authorized AURIX Accessibility Service.",
-        parameters = mapOf(
-            "direction" to Schema.string("Scroll direction: 'down' or 'up'")
-        )
-    )
-
     private val proposeSocialOrInputDecl = FunctionDeclaration(
         name = "propose_social_or_input_action",
-        description = "Prepares a proposed comment or text input action (e.g., posting a Bengali comment on Facebook) and shows it to the user for explicit confirmation before typing or posting.",
+        description = "Prepares a proposed comment or message draft (e.g., a Bengali comment for Facebook or reply for WhatsApp) for user review. When approved, AURIX copies the draft to clipboard and opens the target app.",
         parameters = mapOf(
             "app_name" to Schema.string("Target app name, e.g., Facebook, WhatsApp, Chrome"),
-            "post_summary" to Schema.string("Brief summary of the visible post or context that was read"),
-            "proposed_text" to Schema.string("The exact comment or text proposed by AURIX AI for the user to review and approve"),
-            "button_label" to Schema.string("Label of the submit/post button to tap after approval, e.g., Post, Send, কমেন্ট"),
+            "post_summary" to Schema.string("Brief summary of the post or message topic"),
+            "proposed_text" to Schema.string("The exact comment or message text proposed by AURIX AI"),
+            "button_label" to Schema.string("Label of the submit/post action in the target app, e.g., Post, Send, কমেন্ট"),
             "field_hint" to Schema.string("Optional hint of the text field, e.g., Write a comment")
         ),
         optionalParameters = listOf("field_hint")
@@ -104,8 +84,6 @@ object AurixTools {
         ToolMetadata("open_app", setOf("app_name")),
         ToolMetadata("open_settings", setOf("setting_type")),
         ToolMetadata("search_web", setOf("query")),
-        ToolMetadata("read_screen", setOf("detail_level")),
-        ToolMetadata("scroll_screen", setOf("direction")),
         ToolMetadata(
             "propose_social_or_input_action",
             setOf("app_name", "post_summary", "proposed_text", "button_label", "field_hint")
@@ -118,8 +96,6 @@ object AurixTools {
         openAppDecl,
         openSettingsDecl,
         searchWebDecl,
-        readScreenDecl,
-        scrollScreenDecl,
         proposeSocialOrInputDecl,
         switchLanguageDecl,
         saveMemoryDecl
@@ -181,43 +157,15 @@ object AurixTools {
                 }
             }
 
-            "read_screen" -> {
-                val res = automationManager.readVisibleScreen()
-                when (res) {
-                    is AutomationResult.Success -> {
-                        onSystemActionLogged("Read visible screen content")
-                        jsonResult(true, res.message)
-                    }
-                    is AutomationResult.RequiresPermission -> {
-                        onSystemActionLogged("Accessibility permission needed to read screen.")
-                        jsonResult(false, res.guidance, requiresPermission = res.permissionName)
-                    }
-                    is AutomationResult.Failed -> jsonResult(false, res.reason)
-                }
-            }
-
-            "scroll_screen" -> {
-                val direction = arg("direction").ifEmpty { "down" }
-                val res = automationManager.scrollScreen(direction)
-                when (res) {
-                    is AutomationResult.Success -> {
-                        onSystemActionLogged("Scrolled $direction")
-                        jsonResult(true, res.message)
-                    }
-                    is AutomationResult.RequiresPermission -> jsonResult(false, res.guidance, requiresPermission = res.permissionName)
-                    is AutomationResult.Failed -> jsonResult(false, res.reason)
-                }
-            }
-
             "propose_social_or_input_action" -> {
                 val appName = arg("app_name").ifEmpty { "Facebook" }
                 val postSummary = arg("post_summary")
                 val proposedText = arg("proposed_text")
-                val buttonLabel = arg("button_label").ifEmpty { "Post" }
+                val buttonLabel = arg("button_label").ifEmpty { "Copy & Open" }
                 val fieldHint = arg("field_hint").ifEmpty { null }
 
                 automationManager.queueConfirmationAction(
-                    actionTitle = "Confirm $appName Action",
+                    actionTitle = "Confirm $appName Draft",
                     appName = appName,
                     postSummary = postSummary,
                     proposedText = proposedText,
@@ -225,10 +173,10 @@ object AurixTools {
                     preferredFieldHint = fieldHint,
                     isSocialComment = appName.equals("Facebook", ignoreCase = true)
                 )
-                onSystemActionLogged("Proposed $appName text waiting for your approval: \"$proposedText\"")
+                onSystemActionLogged("Prepared $appName draft waiting for your approval: \"$proposedText\"")
                 jsonResult(
                     true,
-                    "Confirmation card shown to the user with proposed text: \"$proposedText\". Ask the user to review and tap Approve & Post before it will be submitted."
+                    "Confirmation card shown to the user with draft text: \"$proposedText\". Tell the user they can edit or tap Approve to copy it and open $appName."
                 )
             }
 

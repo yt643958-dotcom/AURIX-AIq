@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
-import com.example.automation.AurixAccessibilityService
 import com.example.automation.PendingActionConfirmation
 import com.example.automation.PhoneAutomationManager
 import com.example.core.AppCheckStateHolder
@@ -140,7 +139,6 @@ class AurixAssistantEngine private constructor(context: Context) {
     val isAppInForeground: StateFlow<Boolean> = _isAppInForeground.asStateFlow()
 
     val pendingConfirmation: StateFlow<PendingActionConfirmation?> = automationManager.pendingConfirmation
-    val accessibilityConnected: StateFlow<Boolean> = AurixAccessibilityService.isConnected
 
     private var liveSession: LiveSession? = null
     private val inputTranscriptBuffer = StringBuilder()
@@ -378,8 +376,7 @@ class AurixAssistantEngine private constructor(context: Context) {
 
                 val systemPrompt = SystemPromptBuilder.build(
                     language = currentSettings.language,
-                    memories = memories,
-                    accessibilityEnabled = automationManager.isAccessibilityEnabled()
+                    memories = memories
                 )
 
                 val liveGenConfig = liveGenerationConfig {
@@ -564,8 +561,7 @@ class AurixAssistantEngine private constructor(context: Context) {
                     }
                     val systemPrompt = SystemPromptBuilder.build(
                         language = updatedLang,
-                        memories = memories,
-                        accessibilityEnabled = automationManager.isAccessibilityEnabled()
+                        memories = memories
                     )
 
                     val allMessages = aurixRepository.getMessagesOnce(convId)
@@ -1075,10 +1071,6 @@ class AurixAssistantEngine private constructor(context: Context) {
             settingsRepository.setVolume(volume)
             liveAudioEngine.updatePlaybackSettings(settings.value.voiceSpeed, volume)
         }
-    }
-
-    fun setFloatingBubbleEnabled(enabled: Boolean) {
-        scope.launch { settingsRepository.setFloatingBubbleEnabled(enabled) }
     }
 
     fun setBackgroundServiceEnabled(enabled: Boolean) {

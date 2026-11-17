@@ -47,8 +47,7 @@ class ExampleRobolectricTest {
     fun `system prompt defaults to Bangladeshi Bengali and enforces RIAD identity`() {
         val prompt = SystemPromptBuilder.build(
             language = AurixLanguage.BENGALI,
-            memories = listOf("User prefers concise answers"),
-            accessibilityEnabled = true
+            memories = listOf("User prefers concise answers")
         )
         assertTrue(prompt.contains("Bangladeshi Bengali"))
         assertTrue(prompt.contains("bn-BD"))

@@ -3,8 +3,7 @@ package com.example.core
 object SystemPromptBuilder {
     fun build(
         language: AurixLanguage,
-        memories: List<String>,
-        accessibilityEnabled: Boolean
+        memories: List<String>
     ): String {
         val languageDirective = when (language) {
             AurixLanguage.BENGALI -> """
@@ -39,12 +38,6 @@ object SystemPromptBuilder {
             memories.joinToString("\n") { "- $it" }
         }
 
-        val accessibilityNote = if (accessibilityEnabled) {
-            "Accessibility Service is ENABLED. You may use `read_screen`, `scroll_screen`, and `propose_social_or_input_action` when asked to inspect or interact with apps."
-        } else {
-            "Accessibility Service is currently DISABLED. You can still launch apps (`open_app`), open settings (`open_settings`), and run web searches (`search_web`), and politely ask the user to enable Accessibility Permission in Settings if they ask you to read or interact with on-screen content."
-        }
-
         return """
             You are ${AurixIdentity.APP_NAME}, a premium personal AI voice and text assistant.
 
@@ -65,15 +58,12 @@ object SystemPromptBuilder {
             - You have a natural, calm, intelligent, friendly male persona.
             - Keep voice responses concise, clear, conversational, and helpful—avoid rambling lists unless requested.
 
-            PHONE AUTOMATION & SAFETY RULES:
-            - $accessibilityNote
-            - You can open supported apps (Facebook, WhatsApp, YouTube, Chrome), open phone settings, search the web, read visible screen content, scroll, and propose typing/commenting actions.
-            - For sensitive or external actions (especially posting comments on Facebook or social media, sending messages, or clicking submit/post buttons):
-              1. First open the app if requested (e.g. `open_app("facebook")`).
-              2. Read visible post content (`read_screen()`).
-              3. Understand the post and draft a thoughtful, natural comment in the user's language (Bengali by default).
-              4. ALWAYS call `propose_social_or_input_action` so the user sees the proposed comment and can approve or edit it before anything is typed or posted.
-              5. NEVER claim you posted a comment until the user confirms approval and execution succeeds.
+            PHONE CONTROL & SOCIAL DRAFTING RULES:
+            - You can open supported apps (`open_app` for Facebook, WhatsApp, YouTube, Chrome, or other installed apps), open phone settings (`open_settings`), search Google (`search_web`), remember user facts (`save_memory`), and switch language (`switch_language`).
+            - Privacy & Safety: Never claim you can secretly read other apps' screens in the background. When the user wants a comment or message for Facebook, WhatsApp, or another app:
+              1. Draft a thoughtful, natural comment or message based on what the user described or pasted.
+              2. Call `propose_social_or_input_action` so the user sees the confirmation card to review or edit the draft.
+              3. When the user taps Approve, AURIX copies the approved text to the clipboard and opens the target app so the user can paste and post safely.
             - Never store passwords, OTPs, API keys, or private credentials in memory.
 
             REMEMBERED USER PREFERENCES & MEMORY:

@@ -98,7 +98,6 @@ fun AurixApp(
     val appCheckStatus by viewModel.appCheckStatus.collectAsStateWithLifecycle()
     val appCheckDiagnostic by viewModel.appCheckDiagnostic.collectAsStateWithLifecycle()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
-    val lastSnapshot by viewModel.lastScreenSnapshot.collectAsStateWithLifecycle()
 
     fun navigateTo(route: String) {
         navController.navigate(route) {
@@ -218,7 +217,6 @@ fun AurixApp(
                                 viewModel.updateLanguage(next)
                             },
                             onDismissBanner = { viewModel.clearStatusBanner() },
-                            onOpenFloatingWindow = { viewModel.launchCompactOverlayNow() },
                             onEditPendingText = { viewModel.updatePendingProposedText(it) },
                             onApprovePending = { viewModel.approvePendingConfirmation() },
                             onCancelPending = { viewModel.cancelPendingConfirmation() }
@@ -228,14 +226,10 @@ fun AurixApp(
                     composable(ROUTE_AUTOMATION) {
                         AutomationScreen(
                             permissions = permissions,
-                            lastSnapshot = lastSnapshot,
                             onRequestMic = onRequestMicPermission,
                             onRequestNotifications = onRequestNotificationPermission,
-                            onOpenOverlaySettings = { viewModel.openOverlayPermissionSettings() },
-                            onOpenAccessibilitySettings = { viewModel.openAccessibilityPermissionSettings() },
                             onLaunchApp = { viewModel.launchAppShortcut(it) },
                             onOpenSetting = { viewModel.openPhoneSettingsShortcut(it) },
-                            onReadScreenNow = { viewModel.captureScreenNow() },
                             onRunAssistantCommand = { cmd ->
                                 navigateTo(ROUTE_ASSISTANT)
                                 viewModel.sendTextMessage(cmd)
@@ -273,12 +267,8 @@ fun AurixApp(
                             onSelectVoice = { viewModel.updateVoice(it) },
                             onVoiceSpeedChange = { viewModel.updateVoiceSpeed(it) },
                             onVolumeChange = { viewModel.updateVolume(it) },
-                            onToggleFloatingBubble = { viewModel.setFloatingBubbleEnabled(it) },
                             onToggleBackgroundService = { viewModel.setBackgroundServiceEnabled(it) },
                             onToggleMemory = { viewModel.setMemoryEnabled(it) },
-                            onOpenOverlayPermission = { viewModel.openOverlayPermissionSettings() },
-                            onOpenAccessibilitySettings = { viewModel.openAccessibilityPermissionSettings() },
-                            onLaunchCompactOverlay = { viewModel.launchCompactOverlayNow() },
                             onOpenHistoryTab = { navigateTo(ROUTE_HISTORY) },
                             onClearHistory = { viewModel.clearAllHistory() },
                             onOpenFacebook = { viewModel.openFacebookOwnerProfile() }

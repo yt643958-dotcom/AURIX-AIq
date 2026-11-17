@@ -20,17 +20,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Forum
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
@@ -54,7 +51,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.automation.AutomationResult
-import com.example.automation.VisibleScreenSnapshot
 import com.example.ui.PermissionReadiness
 import com.example.ui.components.AurixBrandHeader
 import com.example.ui.theme.AurixAmber
@@ -74,14 +70,10 @@ import com.example.ui.theme.AurixTextSecondary
 @Composable
 fun AutomationScreen(
     permissions: PermissionReadiness,
-    lastSnapshot: VisibleScreenSnapshot?,
     onRequestMic: () -> Unit,
     onRequestNotifications: () -> Unit,
-    onOpenOverlaySettings: () -> Unit,
-    onOpenAccessibilitySettings: () -> Unit,
     onLaunchApp: (String) -> AutomationResult,
     onOpenSetting: (String) -> AutomationResult,
-    onReadScreenNow: () -> AutomationResult,
     onRunAssistantCommand: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -94,7 +86,7 @@ fun AutomationScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        AurixBrandHeader(subtitle = "Authorized Phone Control & Social Automation")
+        AurixBrandHeader(subtitle = "Phone Shortcuts & Social Draft Assistant")
 
         Spacer(modifier = Modifier.height(14.dp))
 
@@ -136,20 +128,6 @@ fun AutomationScreen(
                 onAction = onRequestMic
             )
             PermissionStatusRow(
-                icon = Icons.Filled.Layers,
-                title = "Floating Bubble Overlay",
-                granted = permissions.overlayGranted,
-                actionLabel = "Enable",
-                onAction = onOpenOverlaySettings
-            )
-            PermissionStatusRow(
-                icon = Icons.Filled.AccessibilityNew,
-                title = "Accessibility Screen Control",
-                granted = permissions.accessibilityEnabled,
-                actionLabel = "Enable",
-                onAction = onOpenAccessibilitySettings
-            )
-            PermissionStatusRow(
                 icon = Icons.Filled.Notifications,
                 title = "Background Notification",
                 granted = permissions.notificationsGranted,
@@ -160,8 +138,8 @@ fun AutomationScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 2. Confirmation-Gated Facebook & Social Automation
-        SectionHeader(title = "Confirmation-Based Social Automation")
+        // 2. Confirmation-Gated Facebook & Social Draft Assistant
+        SectionHeader(title = "Confirmation-Based Social Assistant")
         Spacer(modifier = Modifier.height(8.dp))
         Column(
             modifier = Modifier
@@ -172,21 +150,21 @@ fun AutomationScreen(
                 .padding(14.dp)
         ) {
             Text(
-                text = "Facebook Post Reader & Bengali Comment Assistant",
+                text = "Facebook Bengali Comment Assistant",
                 style = MaterialTheme.typography.titleMedium,
                 color = AurixNeonCyan,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "AURIX AI opens Facebook, reads the visible post via Accessibility Service, drafts a natural Bengali comment, and always asks your explicit approval before typing or posting.",
+                text = "AURIX AI drafts a natural Bangladeshi Bengali comment for you. Review or edit it, tap Approve to copy it to your clipboard and open Facebook safely.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = AurixTextSecondary
             )
             Spacer(modifier = Modifier.height(12.dp))
             Button(
                 onClick = {
-                    onRunAssistantCommand("Facebook খুলে সামনে যে পোস্টটা আছে সেটা পড়ো এবং একটা সুন্দর কমেন্ট লিখে দাও।")
+                    onRunAssistantCommand("Facebook-এ একটি সুন্দর বাংলা কমেন্ট লিখে দাও এবং Approve কার্ড দেখাও।")
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AurixNeonPurple,
@@ -199,7 +177,7 @@ fun AutomationScreen(
             ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Run Facebook Comment Workflow")
+                Text("Draft Facebook Comment")
             }
         }
 
@@ -233,47 +211,6 @@ fun AutomationScreen(
             }
             QuickAppChip("Settings", Icons.Filled.Settings) {
                 feedback = formatResult(onOpenSetting("general"))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. Accessibility Screen Inspector
-        SectionHeader(title = "Live Screen Reader Preview")
-        Spacer(modifier = Modifier.height(8.dp))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(AurixGlass)
-                .border(1.dp, AurixGlassBorder, RoundedCornerShape(20.dp))
-                .padding(14.dp)
-        ) {
-            OutlinedButton(
-                onClick = { feedback = formatResult(onReadScreenNow()) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("capture_screen_btn")
-            ) {
-                Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Capture Active Screen Content")
-            }
-
-            if (lastSnapshot != null) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "Last Package: ${lastSnapshot.packageName.ifEmpty { "None" }}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AurixNeonCyan
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = lastSnapshot.summaryText.take(400),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AurixTextSecondary
-                )
             }
         }
 

@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -120,7 +119,6 @@ fun AssistantScreen(
     onNewChat: () -> Unit,
     onCycleLanguage: () -> Unit,
     onDismissBanner: () -> Unit,
-    onOpenFloatingWindow: () -> Unit,
     onEditPendingText: (String) -> Unit,
     onApprovePending: () -> Unit,
     onCancelPending: () -> Unit,
@@ -204,19 +202,6 @@ fun AssistantScreen(
                 }
 
                 Spacer(modifier = Modifier.width(6.dp))
-
-                IconButton(
-                    onClick = onOpenFloatingWindow,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("launch_floating_window_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.OpenInNew,
-                        contentDescription = "Open floating assistant window",
-                        tint = AurixTextSecondary
-                    )
-                }
 
                 IconButton(
                     onClick = onNewChat,

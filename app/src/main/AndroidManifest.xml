@@ -1,19 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Network & Realtime Voice -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Background Assistant Foreground Service & Floating Overlay -->
+    <!-- Background Assistant Foreground Service & Notification Controls -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Least-privilege package visibility for authorized phone automation -->
+    <!-- Least-privilege package visibility for launching authorized apps -->
     <queries>
         <package android:name="com.facebook.katana" />
         <package android:name="com.whatsapp" />
@@ -52,26 +50,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service managing persistent notification, floating bubble & background voice -->
+        <!-- Foreground service managing persistent notification & background voice controls -->
         <service
             android:name=".service.AurixAssistantService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
-
-        <!-- Authorized Accessibility Service for reading visible screen & confirmation-gated control -->
-        <service
-            android:name=".automation.AurixAccessibilityService"
-            android:exported="false"
-            android:label="@string/accessibility_service_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/aurix_accessibility_config" />
-        </service>
 
     </application>
 

@@ -1,5 +1,7 @@
 package com.example.automation
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -38,24 +40,6 @@ class PhoneAutomationManager(private val context: Context) {
     private val _lastActionLog = MutableStateFlow<String?>(null)
     val lastActionLog: StateFlow<String?> = _lastActionLog.asStateFlow()
 
-    fun isAccessibilityEnabled(): Boolean = AurixAccessibilityService.isConnected.value
-
-    fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(context)
-
-    fun openOverlaySettings() {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:${context.packageName}")
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-    }
-
-    fun openAccessibilitySettings() {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-    }
-
     fun openUrl(url: String): AutomationResult {
         return try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -90,7 +74,6 @@ class PhoneAutomationManager(private val context: Context) {
                 _lastActionLog.value = msg
                 return AutomationResult.Success(msg)
             }
-            // Fallback to web URL for supported web apps if native app isn't installed
             if (fallbackUrl.isNotEmpty() && packageName != "com.whatsapp") {
                 return try {
                     val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
@@ -106,7 +89,6 @@ class PhoneAutomationManager(private val context: Context) {
             return AutomationResult.Failed("$label is not installed on this device.")
         }
 
-        // Try matching installed app label via package manager queryable packages
         val resolved = resolveLaunchablePackageByLabel(normalized)
         if (resolved != null) {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(resolved)
@@ -142,8 +124,6 @@ class PhoneAutomationManager(private val context: Context) {
                 Settings.ACTION_DISPLAY_SETTINGS
             normalized.contains("battery") || normalized.contains("ব্যাটারি") ->
                 Settings.ACTION_BATTERY_SAVER_SETTINGS
-            normalized.contains("accessibility") || normalized.contains("অ্যাক্সেসিবিলিটি") ->
-                Settings.ACTION_ACCESSIBILITY_SETTINGS
             normalized.contains("location") || normalized.contains("লোকেশন") ->
                 Settings.ACTION_LOCATION_SOURCE_SETTINGS
             normalized.contains("app") ->
@@ -181,48 +161,6 @@ class PhoneAutomationManager(private val context: Context) {
         }
     }
 
-    fun readVisibleScreen(): AutomationResult {
-        val service = AurixAccessibilityService.instance
-            ?: return AutomationResult.RequiresPermission(
-                permissionName = "Accessibility Service",
-                guidance = "Please enable AURIX AI Accessibility Service in Android Settings so I can read visible screen content."
-            )
-        val snapshot = service.captureVisibleScreen()
-        val msg = buildString {
-            appendLine("Active app package: ${snapshot.packageName.ifEmpty { "Unknown" }}")
-            if (snapshot.extractedPosts.isNotEmpty()) {
-                appendLine("Main visible text/posts:")
-                snapshot.extractedPosts.take(6).forEachIndexed { idx, post ->
-                    appendLine("${idx + 1}. $post")
-                }
-            } else {
-                appendLine(snapshot.summaryText)
-            }
-            if (snapshot.clickableLabels.isNotEmpty()) {
-                appendLine("Visible buttons: ${snapshot.clickableLabels.take(8).joinToString(", ")}")
-            }
-        }
-        _lastActionLog.value = "Captured visible screen from ${snapshot.packageName}"
-        return AutomationResult.Success(msg.trim())
-    }
-
-    fun scrollScreen(direction: String): AutomationResult {
-        val service = AurixAccessibilityService.instance
-            ?: return AutomationResult.RequiresPermission(
-                permissionName = "Accessibility Service",
-                guidance = "Enable AURIX AI Accessibility Service to scroll content on screen."
-            )
-        val forward = !direction.lowercase().let { it.contains("up") || it.contains("back") || it.contains("উপরে") }
-        val ok = service.scrollScreen(forward)
-        return if (ok) {
-            val dirText = if (forward) "down" else "up"
-            _lastActionLog.value = "Scrolled $dirText"
-            AutomationResult.Success("Scrolled $dirText successfully.")
-        } else {
-            AutomationResult.Failed("No scrollable content found on the current screen.")
-        }
-    }
-
     fun queueConfirmationAction(
         actionTitle: String,
         appName: String,
@@ -256,52 +194,44 @@ class PhoneAutomationManager(private val context: Context) {
 
     fun executeApprovedAction(): AutomationResult {
         val pending = _pendingConfirmation.value
-            ?: return AutomationResult.Failed("No pending action to execute.")
-        val service = AurixAccessibilityService.instance
-        if (service == null) {
-            _pendingConfirmation.value = null
-            return AutomationResult.RequiresPermission(
-                permissionName = "Accessibility Service",
-                guidance = "Enable AURIX AI Accessibility Service to type and submit on external apps."
-            )
+            ?: return AutomationResult.Failed("No pending draft to apply.")
+
+        val copied = try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            if (clipboard != null && pending.proposedText.isNotBlank()) {
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("AURIX Draft", pending.proposedText)
+                )
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Clipboard copy failed", e)
+            false
         }
 
-        // First tap "Comment" if needed to open the comment box on Facebook/social apps
-        if (pending.isSocialComment) {
-            service.clickNodeByLabel("Comment") || service.clickNodeByLabel("কমেন্ট")
-        }
-
-        var typed = true
-        if (pending.proposedText.isNotBlank()) {
-            typed = service.typeTextIntoEditable(
-                text = pending.proposedText,
-                preferredHint = pending.preferredFieldHint
-            )
-        }
-
-        var clicked = true
-        if (pending.buttonLabelToClick.isNotBlank()) {
-            clicked = service.clickNodeByLabel(pending.buttonLabelToClick)
+        val launchResult = if (pending.appName.isNotBlank()) {
+            openApp(pending.appName)
+        } else {
+            AutomationResult.Success("Draft ready.")
         }
 
         _pendingConfirmation.value = null
 
         return when {
-            typed && clicked -> {
-                val msg = "Approved action completed in ${pending.appName}."
+            copied && launchResult is AutomationResult.Success -> {
+                val msg = "Copied to clipboard & opened ${pending.appName} — paste and tap '${pending.buttonLabelToClick}'."
                 _lastActionLog.value = msg
                 AutomationResult.Success(msg)
             }
-            typed -> {
-                val msg = "Typed \"${pending.proposedText}\" in ${pending.appName}, but could not find '${pending.buttonLabelToClick}' button automatically — please tap it to finish."
+            copied -> {
+                val msg = "Copied draft to clipboard: \"${pending.proposedText}\". Open ${pending.appName} and paste."
                 _lastActionLog.value = msg
                 AutomationResult.Success(msg)
             }
-            else -> {
-                AutomationResult.Failed(
-                    "Could not find an editable input box on the current ${pending.appName} screen. Please open the post's comment field first and approve again."
-                )
-            }
+            launchResult is AutomationResult.Success -> launchResult
+            else -> AutomationResult.Failed("Could not copy draft or open ${pending.appName}.")
         }
     }
 }

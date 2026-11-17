@@ -86,12 +86,8 @@ fun SettingsScreen(
     onSelectVoice: (AurixVoice) -> Unit,
     onVoiceSpeedChange: (Float) -> Unit,
     onVolumeChange: (Float) -> Unit,
-    onToggleFloatingBubble: (Boolean) -> Unit,
     onToggleBackgroundService: (Boolean) -> Unit,
     onToggleMemory: (Boolean) -> Unit,
-    onOpenOverlayPermission: () -> Unit,
-    onOpenAccessibilitySettings: () -> Unit,
-    onLaunchCompactOverlay: () -> Unit,
     onOpenHistoryTab: () -> Unit,
     onClearHistory: () -> Unit,
     onOpenFacebook: () -> Unit,
@@ -105,7 +101,7 @@ fun SettingsScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        AurixBrandHeader(subtitle = "Voice, Language, Overlay & Privacy Controls")
+        AurixBrandHeader(subtitle = "Voice, Language, Background & Privacy Controls")
 
         // 1. Language Selection
         SettingsCard(icon = Icons.Filled.Language, title = "Language Selection (ভাষা)") {
@@ -216,58 +212,18 @@ fun SettingsScreen(
             )
         }
 
-        // 5 & 6. Floating Bubble & Background Assistant Settings
-        SettingsCard(icon = Icons.Filled.Layers, title = "Floating Bubble & Background Assistant") {
-            SwitchRow(
-                title = "Floating AURIX Logo Bubble",
-                subtitle = if (permissions.overlayGranted) {
-                    "Shows draggable edge-snapping logo when minimized"
-                } else {
-                    "Overlay permission required"
-                },
-                checked = settings.floatingBubbleEnabled,
-                onCheckedChange = onToggleFloatingBubble
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+        // 5. Background Assistant Settings
+        SettingsCard(icon = Icons.Filled.Layers, title = "Background Assistant") {
             SwitchRow(
                 title = "Background Foreground Service",
-                subtitle = "Keeps live assistant & persistent notification active",
+                subtitle = if (permissions.notificationsGranted) {
+                    "Keeps live assistant & persistent notification controls active"
+                } else {
+                    "Allow notifications in Control tab to show persistent controls"
+                },
                 checked = settings.backgroundServiceEnabled,
                 onCheckedChange = onToggleBackgroundService
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = onOpenOverlayPermission,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                ) {
-                    Text(if (permissions.overlayGranted) "Overlay Granted" else "Grant Overlay")
-                }
-                Button(
-                    onClick = onLaunchCompactOverlay,
-                    colors = ButtonDefaults.buttonColors(containerColor = AurixNeonPurple),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                        .testTag("test_compact_overlay_btn")
-                ) {
-                    Text("Open Compact UI")
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = onOpenAccessibilitySettings,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp)
-            ) {
-                Text(
-                    if (permissions.accessibilityEnabled) "Accessibility Service: Active"
-                    else "Enable Accessibility Phone Control"
-                )
-            }
         }
 
         // 7 & 8. Chat History & Memory Settings
