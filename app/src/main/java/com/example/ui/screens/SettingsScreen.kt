@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
@@ -91,6 +92,7 @@ fun SettingsScreen(
     onOpenHistoryTab: () -> Unit,
     onClearHistory: () -> Unit,
     onOpenFacebook: () -> Unit,
+    onRefreshAppCheck: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -271,6 +273,18 @@ fun SettingsScreen(
                 "Text Models",
                 "${AurixIdentity.TEXT_MODEL_NAME} / ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME}"
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onRefreshAppCheck,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("refresh_appcheck_btn")
+            ) {
+                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Refresh App Check Token")
+            }
         }
 
         // 10. Privacy Settings

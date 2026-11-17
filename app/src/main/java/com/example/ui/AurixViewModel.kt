@@ -126,4 +126,6 @@ class AurixViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelPendingConfirmation() = engine.cancelPendingConfirmation()
 
     fun getAppCheckDiagnostic(): String = AppCheckStateHolder.lastDiagnostic
+
+    fun verifyAndRefreshAppCheck() = engine.verifyAndRefreshAppCheck()
 }

@@ -256,7 +256,14 @@ fun AssistantScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = !isVoiceActive) {
+                            orbExpanded = true
+                            onRequestMicAndStartVoice()
+                        }
+                        .padding(vertical = 4.dp)
                 ) {
                     val statusColor = when (voiceState) {
                         VoiceSessionState.LISTENING -> AurixNeonCyan
@@ -288,7 +295,11 @@ fun AssistantScreen(
                             }
                             VoiceSessionState.SPEAKING -> "AURIX Speaking (Interrupt anytime)"
                             VoiceSessionState.MUTED -> "Mic Muted"
-                            VoiceSessionState.ERROR -> "Live Voice Error — Tap to Retry"
+                            VoiceSessionState.ERROR -> if (settings.language == AurixLanguage.ENGLISH) {
+                                "Live Voice Error — Tap to Retry"
+                            } else {
+                                "লাইভ ভয়েস সমস্যা — আবার চেষ্টা করতে ট্যাপ করুন"
+                            }
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = statusColor,

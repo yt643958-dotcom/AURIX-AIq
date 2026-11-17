@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        AurixAssistantEngine.getInstance(applicationContext).setAppForeground(true)
+        AurixAssistantEngine.getInstance(applicationContext).onAppReturnedToForeground()
         viewModel.refreshPermissions()
     }
 

@@ -176,4 +176,31 @@ class ExampleRobolectricTest {
         assertEquals(16000, LiveAudioEngine.parseSampleRate("audio/pcm;rate=16000"))
         assertEquals(24000, LiveAudioEngine.parseSampleRate("audio/pcm"))
     }
+
+    @Test
+    fun `app check 403 detection distinguishes token failures from quota limits`() {
+        val appCheckErr = IllegalStateException("Firebase App Check token is invalid.")
+        val wrapped403 = RuntimeException("HTTP 403 Forbidden: attestation failed", appCheckErr)
+        val quotaErr = IllegalStateException("Quota exceeded: HTTP 429 rate limit")
+
+        assertTrue(AurixAssistantEngine.isAppCheckError(appCheckErr))
+        assertTrue(AurixAssistantEngine.isAppCheckError(wrapped403))
+        assertFalse(AurixAssistantEngine.isAppCheckError(quotaErr))
+    }
+
+    @Test
+    fun `configureAppCheck remains stable across repeated activity creation in same process`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("aurix_appcheck_meta", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+
+        configureAppCheck(context, Intent())
+        assertEquals(AppCheckStatus.RECAPTCHA_ACTIVE, AppCheckStateHolder.status)
+
+        // Second call simulating Activity recreation should keep active reCAPTCHA state intact.
+        configureAppCheck(context, Intent())
+        assertEquals(AppCheckStatus.RECAPTCHA_ACTIVE, AppCheckStateHolder.status)
+    }
 }

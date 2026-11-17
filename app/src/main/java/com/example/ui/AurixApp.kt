@@ -271,7 +271,8 @@ fun AurixApp(
                             onToggleMemory = { viewModel.setMemoryEnabled(it) },
                             onOpenHistoryTab = { navigateTo(ROUTE_HISTORY) },
                             onClearHistory = { viewModel.clearAllHistory() },
-                            onOpenFacebook = { viewModel.openFacebookOwnerProfile() }
+                            onOpenFacebook = { viewModel.openFacebookOwnerProfile() },
+                            onRefreshAppCheck = { viewModel.verifyAndRefreshAppCheck() }
                         )
                     }
                 }

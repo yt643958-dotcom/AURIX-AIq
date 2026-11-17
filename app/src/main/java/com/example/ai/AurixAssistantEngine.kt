@@ -12,6 +12,8 @@ import com.example.core.AurixIdentity
 import com.example.core.AurixLanguage
 import com.example.core.AurixVoice
 import com.example.core.SystemPromptBuilder
+import com.example.core.ensureAppCheckTokenFresh
+import com.example.core.prefetchAppCheckHealth
 import com.example.data.local.AurixDatabase
 import com.example.data.local.AurixRepository
 import com.example.data.local.AurixSettings
@@ -200,8 +202,12 @@ class AurixAssistantEngine private constructor(context: Context) {
             scope.launch {
                 commitPendingUserTranscriptIfNeeded()
                 commitPendingAiTranscriptIfNeeded()
+                val errLower = err.lowercase()
+                if (errLower.contains("403") || errLower.contains("app check") || errLower.contains("appcheck")) {
+                    ensureAppCheckTokenFresh(appContext, forceRefresh = true, clearCacheAndReinstall = true)
+                }
                 _voiceState.value = VoiceSessionState.ERROR
-                _statusBanner.value = err
+                _statusBanner.value = formatLiveErrorBanner(err, settings.value.language)
             }
         },
         onSessionClosed = { hadServerResponse ->
@@ -209,11 +215,18 @@ class AurixAssistantEngine private constructor(context: Context) {
                 commitPendingUserTranscriptIfNeeded()
                 commitPendingAiTranscriptIfNeeded()
                 if (!hadServerResponse && _voiceState.value != VoiceSessionState.ERROR) {
+                    ensureAppCheckTokenFresh(appContext, forceRefresh = true, clearCacheAndReinstall = false)
                     _voiceState.value = VoiceSessionState.ERROR
-                    _statusBanner.value = if (settings.value.language == AurixLanguage.ENGLISH) {
-                        "Gemini Live session closed without a reply. Please verify internet/App Check and try again."
+                    _statusBanner.value = if (!hasActiveInternetConnection()) {
+                        if (settings.value.language == AurixLanguage.ENGLISH) {
+                            "No internet connection. Please enable Wi-Fi or mobile data and tap to retry."
+                        } else {
+                            "ফোনে ইন্টারনেট সংযোগ নেই। Wi-Fi বা মোবাইল ডেটা চালু করে আবার চেষ্টা করুন।"
+                        }
+                    } else if (settings.value.language == AurixLanguage.ENGLISH) {
+                        "Gemini Live closed before replying. Token refreshed—please tap to retry."
                     } else {
-                        "Gemini Live সংযোগ উত্তর ছাড়াই বন্ধ হয়েছে। ইন্টারনেট এবং App Check যাচাই করে আবার চেষ্টা করুন।"
+                        "Gemini Live সংযোগ উত্তর আসার আগেই বন্ধ হয়েছে। আবার চেষ্টা করতে ট্যাপ করুন।"
                     }
                 } else if (_voiceState.value != VoiceSessionState.ERROR) {
                     _voiceState.value = VoiceSessionState.DISCONNECTED
@@ -267,11 +280,54 @@ class AurixAssistantEngine private constructor(context: Context) {
     }
 
     fun refreshAppCheckStatus() {
-        // StateFlows on AppCheckStateHolder stay live automatically.
+        prefetchAppCheckHealth(appContext)
+    }
+
+    fun verifyAndRefreshAppCheck() {
+        scope.launch {
+            val lang = settings.value.language
+            val ok = ensureAppCheckTokenFresh(
+                context = appContext,
+                forceRefresh = true,
+                clearCacheAndReinstall = true
+            )
+            _statusBanner.value = if (ok) {
+                if (lang == AurixLanguage.ENGLISH) {
+                    "App Check token verified and refreshed."
+                } else {
+                    "App Check নিরাপত্তা টোকেন সফলভাবে রিফ্রেশ হয়েছে।"
+                }
+            } else {
+                if (lang == AurixLanguage.ENGLISH) {
+                    "App Check refresh failed. Verify internet and Automatic Date & Time on your phone."
+                } else {
+                    "App Check রিফ্রেশ করা যায়নি। ইন্টারনেট এবং ফোনের Automatic Date & Time চালু আছে কিনা দেখুন।"
+                }
+            }
+        }
+    }
+
+    fun onAppReturnedToForeground() {
+        _isAppInForeground.value = true
+        scope.launch {
+            if (AppCheckStateHolder.status == AppCheckStatus.ERROR) {
+                ensureAppCheckTokenFresh(appContext, forceRefresh = true, clearCacheAndReinstall = false)
+            } else {
+                prefetchAppCheckHealth(appContext)
+            }
+        }
     }
 
     fun setAppForeground(inForeground: Boolean) {
         _isAppInForeground.value = inForeground
+    }
+
+    private suspend fun preflightAppCheckIfNeeded() {
+        if (AppCheckStateHolder.status == AppCheckStatus.ERROR ||
+            AppCheckStateHolder.status == AppCheckStatus.INITIALIZING
+        ) {
+            ensureAppCheckTokenFresh(appContext, forceRefresh = true, clearCacheAndReinstall = false)
+        }
     }
 
     fun clearStatusBanner() {
@@ -366,7 +422,20 @@ class AurixAssistantEngine private constructor(context: Context) {
             _isMuted.value = false
             liveAudioEngine.setMuted(false)
 
+            val lang = settings.value.language
+            if (!hasActiveInternetConnection()) {
+                _voiceState.value = VoiceSessionState.ERROR
+                _statusBanner.value = if (lang == AurixLanguage.ENGLISH) {
+                    "No internet connection. Turn on Wi-Fi or mobile data and tap to retry."
+                } else {
+                    "ফোনে ইন্টারনেট সংযোগ নেই। Wi-Fi বা মোবাইল ডেটা চালু করে আবার চেষ্টা করুন।"
+                }
+                return@launch
+            }
+
             try {
+                preflightAppCheckIfNeeded()
+
                 val convId = ensureActiveConversation()
                 val currentSettings = settingsRepository.getCurrentSettings()
                 val memories = if (currentSettings.memoryEnabled) {
@@ -405,31 +474,11 @@ class AurixAssistantEngine private constructor(context: Context) {
 
                 val sysContent = content { text(systemPrompt) }
                 val aiClient = Firebase.ai(backend = GenerativeBackend.googleAI())
-                val session = try {
-                    val primaryModel: LiveGenerativeModel = aiClient.liveModel(
-                        modelName = AurixIdentity.LIVE_MODEL_NAME,
-                        generationConfig = liveGenConfig,
-                        tools = listOf(AurixTools.tool),
-                        systemInstruction = sysContent
-                    )
-                    withTimeout(30_000L) {
-                        primaryModel.connect()
-                    }
-                } catch (primaryEx: Exception) {
-                    if (primaryEx is CancellationException && primaryEx !is TimeoutCancellationException) {
-                        throw primaryEx
-                    }
-                    Log.w(TAG, "Primary Live model failed (${primaryEx.message}); trying fallback Live model.")
-                    val fallbackModel: LiveGenerativeModel = aiClient.liveModel(
-                        modelName = AurixIdentity.LIVE_FALLBACK_MODEL_NAME,
-                        generationConfig = liveGenConfig,
-                        tools = listOf(AurixTools.tool),
-                        systemInstruction = sysContent
-                    )
-                    withTimeout(30_000L) {
-                        fallbackModel.connect()
-                    }
-                }
+                val session = connectLiveModelWithRecovery(
+                    aiClient = aiClient,
+                    liveGenConfig = liveGenConfig,
+                    sysContent = sysContent
+                )
                 liveSession = session
 
                 // Replay brief recent alternating context without risking session startup failure
@@ -456,17 +505,68 @@ class AurixAssistantEngine private constructor(context: Context) {
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Timed out connecting to Gemini Live API", e)
                 _voiceState.value = VoiceSessionState.ERROR
-                _statusBanner.value = "Gemini Live connection timed out after 30s. Please check internet and try again."
+                _statusBanner.value = if (lang == AurixLanguage.ENGLISH) {
+                    "Gemini Live connection timed out after 30s. Check internet and tap to retry."
+                } else {
+                    "Gemini Live সংযোগে বেশি সময় লাগছে (Timeout)। ইন্টারনেট চেক করে আবার চেষ্টা করুন।"
+                }
                 liveAudioEngine.stopSyncResources()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start Live voice session", e)
                 _voiceState.value = VoiceSessionState.ERROR
-                _statusBanner.value = e.localizedMessage ?: "Unable to connect to Gemini Live API."
+                _statusBanner.value = formatUserFriendlyAiError(e, lang)
                 liveAudioEngine.stopSyncResources()
             }
         }
+    }
+
+    private suspend fun connectLiveModelWithRecovery(
+        aiClient: com.google.firebase.ai.FirebaseAI,
+        liveGenConfig: com.google.firebase.ai.type.LiveGenerationConfig,
+        sysContent: Content
+    ): LiveSession {
+        suspend fun connectSingle(modelName: String): LiveSession {
+            val model: LiveGenerativeModel = aiClient.liveModel(
+                modelName = modelName,
+                generationConfig = liveGenConfig,
+                tools = listOf(AurixTools.tool),
+                systemInstruction = sysContent
+            )
+            return withTimeout(30_000L) { model.connect() }
+        }
+
+        val modelsToTry = listOf(AurixIdentity.LIVE_MODEL_NAME, AurixIdentity.LIVE_FALLBACK_MODEL_NAME)
+        var recoveredAppCheck = false
+        var lastError: Exception? = null
+
+        for (modelName in modelsToTry) {
+            try {
+                return connectSingle(modelName)
+            } catch (e: CancellationException) {
+                if (e !is TimeoutCancellationException) throw e
+                lastError = e
+                Log.w(TAG, "Live model $modelName timed out during connect.")
+            } catch (e: Exception) {
+                lastError = e
+                if (isAppCheckError(e) && !recoveredAppCheck) {
+                    recoveredAppCheck = true
+                    Log.w(TAG, "Live connect hit App Check error on $modelName; clearing cache & refreshing token before retry.")
+                    val refreshed = ensureAppCheckTokenFresh(
+                        context = appContext,
+                        forceRefresh = true,
+                        clearCacheAndReinstall = true
+                    )
+                    if (refreshed) {
+                        return connectSingle(modelName)
+                    }
+                }
+                Log.w(TAG, "Live model $modelName failed (${e.message}); checking next fallback if available.")
+            }
+        }
+
+        throw (lastError ?: IllegalStateException("Unable to connect to Gemini Live API."))
     }
 
     fun stopVoiceConversation() {
@@ -627,6 +727,8 @@ class AurixAssistantEngine private constructor(context: Context) {
         systemPrompt: String,
         historyContents: List<Content>
     ): String {
+        preflightAppCheckIfNeeded()
+
         val now = System.currentTimeMillis()
         val primaryCooldownUntil = quotaPrefs.getLong(KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL, 0L)
         val skipPrimaryForCooldown = now < primaryCooldownUntil
@@ -655,6 +757,8 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
 
         var lastError: Exception? = null
+        var retriedAppCheckRecovery = false
+
         for ((index, attempt) in attempts.withIndex()) {
             try {
                 if (index > 0) {
@@ -678,15 +782,45 @@ class AurixAssistantEngine private constructor(context: Context) {
                 throw e
             } catch (e: Exception) {
                 lastError = e
-                if (attempt.modelName == AurixIdentity.TEXT_MODEL_NAME && isQuotaError(e)) {
-                    val cooldownMs = parseRetryAfterMs(e) ?: DEFAULT_PRIMARY_QUOTA_COOLDOWN_MS
-                    quotaPrefs.edit()
-                        .putLong(KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL, System.currentTimeMillis() + cooldownMs)
-                        .commit()
+                if (isAppCheckError(e) && !retriedAppCheckRecovery) {
+                    retriedAppCheckRecovery = true
                     Log.w(
                         TAG,
-                        "Primary model ${attempt.modelName} hit quota limit; caching fallback to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME} for ${cooldownMs / 1000}s"
+                        "Text attempt (${attempt.modelName}) hit App Check 403; clearing token cache & refreshing before retry.",
+                        e
                     )
+                    val recovered = ensureAppCheckTokenFresh(
+                        context = appContext,
+                        forceRefresh = true,
+                        clearCacheAndReinstall = true
+                    )
+                    if (recovered) {
+                        try {
+                            _textChatState.value = TextChatState.Sending
+                            return executeTextChatTurnWithSchemaRetry(
+                                convId = convId,
+                                prompt = prompt,
+                                systemPrompt = systemPrompt,
+                                historyContents = historyContents,
+                                attempt = attempt
+                            )
+                        } catch (retryEx: CancellationException) {
+                            throw retryEx
+                        } catch (retryEx: Exception) {
+                            lastError = retryEx
+                            if (attempt.modelName == AurixIdentity.TEXT_MODEL_NAME && isQuotaError(retryEx)) {
+                                cachePrimaryQuotaCooldown(retryEx)
+                            }
+                            if (!isRetryableModelFailure(retryEx) || index >= attempts.lastIndex) {
+                                throw retryEx
+                            }
+                            continue
+                        }
+                    }
+                }
+
+                if (attempt.modelName == AurixIdentity.TEXT_MODEL_NAME && isQuotaError(e)) {
+                    cachePrimaryQuotaCooldown(e)
                 }
                 val hasNextAttempt = index < attempts.lastIndex
                 val shouldTryFallback = hasNextAttempt && isRetryableModelFailure(e)
@@ -702,6 +836,17 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
 
         throw (lastError ?: IllegalStateException("Text generation failed across all models."))
+    }
+
+    private fun cachePrimaryQuotaCooldown(e: Throwable) {
+        val cooldownMs = parseRetryAfterMs(e) ?: DEFAULT_PRIMARY_QUOTA_COOLDOWN_MS
+        quotaPrefs.edit()
+            .putLong(KEY_PRIMARY_QUOTA_COOLDOWN_UNTIL, System.currentTimeMillis() + cooldownMs)
+            .commit()
+        Log.w(
+            TAG,
+            "Primary model ${AurixIdentity.TEXT_MODEL_NAME} hit quota limit; caching fallback to ${AurixIdentity.TEXT_FALLBACK_MODEL_NAME} for ${cooldownMs / 1000}s"
+        )
     }
 
     private suspend fun executeTextChatTurnWithSchemaRetry(
@@ -854,21 +999,30 @@ class AurixAssistantEngine private constructor(context: Context) {
             val toolContent = content("function") {
                 responseParts.forEach { part(it) }
             }
-            withTimeout(timeoutMs) {
-                chat.sendMessageStream(toolContent).collect { chunk ->
-                    lastResponse = chunk
-                    val chunkText = extractResponseText(chunk)
-                    if (chunkText.isNotEmpty()) {
-                        if (textBuffer.isNotEmpty() && !textBuffer.endsWith("\n")) {
-                            textBuffer.append("\n")
+            try {
+                withTimeout(timeoutMs) {
+                    chat.sendMessageStream(toolContent).collect { chunk ->
+                        lastResponse = chunk
+                        val chunkText = extractResponseText(chunk)
+                        if (chunkText.isNotEmpty()) {
+                            if (textBuffer.isNotEmpty() && !textBuffer.endsWith("\n")) {
+                                textBuffer.append("\n")
+                            }
+                            textBuffer.append(chunkText)
+                            _textChatState.value = TextChatState.Streaming(textBuffer.toString())
                         }
-                        textBuffer.append(chunkText)
-                        _textChatState.value = TextChatState.Streaming(textBuffer.toString())
-                    }
-                    if (chunk.functionCalls.isNotEmpty()) {
-                        pendingCalls.addAll(chunk.functionCalls)
+                        if (chunk.functionCalls.isNotEmpty()) {
+                            pendingCalls.addAll(chunk.functionCalls)
+                        }
                     }
                 }
+            } catch (timeout: TimeoutCancellationException) {
+                val partial = textBuffer.toString().trim()
+                if (partial.isNotEmpty()) {
+                    Log.w(TAG, "Post-tool stream timed out after receiving ${partial.length} chars; returning partial text.")
+                    return partial
+                }
+                throw timeout
             }
         }
 
@@ -939,10 +1093,34 @@ class AurixAssistantEngine private constructor(context: Context) {
         }
     }
 
+    private fun formatLiveErrorBanner(rawError: String, language: AurixLanguage): String {
+        val lower = rawError.lowercase()
+        return when {
+            !hasActiveInternetConnection() -> if (language == AurixLanguage.ENGLISH) {
+                "No internet connection. Please turn on Wi-Fi or mobile data and tap to retry."
+            } else {
+                "ইন্টারনেট সংযোগ নেই। Wi-Fi বা মোবাইল ডেটা চালু করে আবার চেষ্টা করুন।"
+            }
+            lower.contains("403") || lower.contains("app check") || lower.contains("appcheck") -> if (language == AurixLanguage.ENGLISH) {
+                "App Check refreshed. Tap to retry — or check phone Automatic Date & Time."
+            } else {
+                "App Check টোকেন রিফ্রেশ করা হয়েছে। আবার চেষ্টা করতে ট্যাপ করুন (সমস্যা থাকলে ফোনের Automatic Date & Time অন করুন)।"
+            }
+            else -> rawError
+        }
+    }
+
     private fun formatUserFriendlyAiError(e: Exception, language: AurixLanguage): String {
         val raw = e.localizedMessage ?: e.message ?: "Unknown error"
         val lower = collectErrorText(e)
         return when {
+            !hasActiveInternetConnection() -> {
+                if (language == AurixLanguage.ENGLISH) {
+                    "No internet connection. Please turn on Wi-Fi or mobile data and tap Retry."
+                } else {
+                    "ফোনে ইন্টারনেট সংযোগ নেই। Wi-Fi বা মোবাইল ডেটা চালু করে আবার চেষ্টা করুন।"
+                }
+            }
             isQuotaError(e) -> {
                 if (language == AurixLanguage.ENGLISH) {
                     "Free-tier AI quota limit has been reached for now. Please wait and retry later, or check your Gemini API plan/rate limits.\n\nDetails: $raw"
@@ -950,11 +1128,11 @@ class AurixAssistantEngine private constructor(context: Context) {
                     "এই প্রজেক্টের ফ্রি AI ব্যবহারের সীমা (Quota) আপাতত শেষ হয়ে গেছে। কিছুক্ষণ পর আবার চেষ্টা করুন অথবা Google AI Studio-তে আপনার প্ল্যান/রেট-লিমিট চেক করুন।\n\nবিস্তারিত: $raw"
                 }
             }
-            lower.contains("403") || lower.contains("app check") || lower.contains("appcheck") -> {
+            isAppCheckError(e) -> {
                 if (language == AurixLanguage.ENGLISH) {
-                    "App Check / Authorization error (403): $raw"
+                    "App Check / Authorization error (403): $raw\n\nPlease tap Retry, or verify Internet & Automatic Date/Time in Android Settings."
                 } else {
-                    "অ্যাপ অনুমোদন সমস্যা (App Check 403): $raw"
+                    "অ্যাপ অনুমোদন সমস্যা (App Check 403): $raw\n\nটোকেন রিফ্রেশ করা হয়েছে — আবার চেষ্টা করুন ট্যাপ করুন। তবুও সমস্যা হলে ফোনের Settings > Automatic Date & Time চালু আছে কিনা দেখুন।"
                 }
             }
             lower.contains("unable to resolve host") || lower.contains("unknownhost") || lower.contains("network") -> {
@@ -1129,6 +1307,17 @@ class AurixAssistantEngine private constructor(context: Context) {
                 depth++
             }
             return sb.toString().lowercase()
+        }
+
+        internal fun isAppCheckError(e: Throwable?): Boolean {
+            if (isQuotaError(e)) return false
+            val text = collectErrorText(e)
+            return text.contains("app check") ||
+                text.contains("appcheck") ||
+                text.contains("attestation") ||
+                (text.contains("403") && (text.contains("token") || text.contains("forbidden") || text.contains("permission"))) ||
+                text.contains("permission_denied") ||
+                text.contains("http 403")
         }
 
         internal fun isQuotaError(e: Throwable?): Boolean {
