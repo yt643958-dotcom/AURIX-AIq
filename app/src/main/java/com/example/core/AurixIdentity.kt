@@ -5,7 +5,7 @@ object AurixIdentity {
     const val OWNER_NAME = "RIAD"
     const val CREATOR_NAME = "RIAD"
     const val OFFICIAL_FACEBOOK_URL = "https://www.facebook.com/ZtrRiyvex"
-    const val APP_VERSION = "1.0.4"
+    const val APP_VERSION = "1.0.5"
 
     const val OWNER_ANSWER_EN =
         "My owner and creator is RIAD. He is the person behind AURIX AI."

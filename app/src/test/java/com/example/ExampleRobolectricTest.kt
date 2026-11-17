@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.ai.AurixAssistantEngine
 import com.example.ai.AurixTools
 import com.example.ai.ChatHistorySanitizer
+import com.example.ai.LiveAudioEngine
 import com.example.automation.PhoneAutomationManager
 import com.example.core.AppCheckStateHolder
 import com.example.core.AppCheckStatus
@@ -167,5 +168,12 @@ class ExampleRobolectricTest {
         val cooldown = AurixAssistantEngine.parseRetryAfterMs(err)
         assertNotNull(cooldown)
         assertEquals(6L * 60L * 60L * 1000L, cooldown)
+    }
+
+    @Test
+    fun `live audio sample rate parser handles valid and missing rates`() {
+        assertEquals(24000, LiveAudioEngine.parseSampleRate("audio/pcm;rate=24000"))
+        assertEquals(16000, LiveAudioEngine.parseSampleRate("audio/pcm;rate=16000"))
+        assertEquals(24000, LiveAudioEngine.parseSampleRate("audio/pcm"))
     }
 }

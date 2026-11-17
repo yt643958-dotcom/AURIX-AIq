@@ -146,6 +146,7 @@ class AurixAssistantEngine private constructor(context: Context) {
     private var userTranscriptCommittedForTurn = false
 
     private val liveAudioEngine = LiveAudioEngine(
+        context = appContext,
         onInputTranscriptChunk = { chunk ->
             synchronized(inputTranscriptBuffer) {
                 inputTranscriptBuffer.append(chunk)
@@ -391,10 +392,10 @@ class AurixAssistantEngine private constructor(context: Context) {
                     realtimeInputConfig = RealtimeInputConfig.builder()
                         .setAutomaticActivityDetection(
                             ActivityDetectionConfig.builder()
-                                .setStartSensitivity(ActivityDetectionConfig.Sensitivity.HIGH)
+                                .setStartSensitivity(ActivityDetectionConfig.Sensitivity.LOW)
                                 .setEndSensitivity(ActivityDetectionConfig.Sensitivity.LOW)
-                                .setPrefixPaddingMs(40)
-                                .setSilenceDurationMs(600)
+                                .setPrefixPaddingMs(120)
+                                .setSilenceDurationMs(700)
                                 .build()
                         )
                         .setActivityHandling(RealtimeInputConfig.ActivityHandling.INTERRUPT)
